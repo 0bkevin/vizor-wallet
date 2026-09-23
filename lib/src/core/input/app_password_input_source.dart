@@ -186,6 +186,19 @@ class _AppPasswordInputState extends ConsumerState<AppPasswordInput>
   bool _active = false;
   bool _awaitingActivation = false;
   TextEditingController? _editingController;
+  TextEditingValue? _lastEditingValue;
+
+  void _onEditingChanged() {
+    final value = _editingController?.value;
+    final previous = _lastEditingValue;
+    _lastEditingValue = value;
+    // Autofocus initializes selection without user input. Only text or IME
+    // composition changes invalidate restoration; key events are guarded too.
+    if (value?.text != previous?.text ||
+        value?.composing != previous?.composing) {
+      _cancelRestore();
+    }
+  }
 
   void _cancelRestore() {
     _revision++;
@@ -210,8 +223,9 @@ class _AppPasswordInputState extends ConsumerState<AppPasswordInput>
   }
 
   void _onFocus(bool focused) {
-    _editingController?.removeListener(_cancelRestore);
+    _editingController?.removeListener(_onEditingChanged);
     _editingController = null;
+    _lastEditingValue = null;
     final revision = ++_revision;
     _awaitingActivation = false;
     if (!focused) return;
@@ -226,7 +240,8 @@ class _AppPasswordInputState extends ConsumerState<AppPasswordInput>
     }
 
     context.visitChildElements(findEditor);
-    _editingController?.addListener(_cancelRestore);
+    _lastEditingValue = _editingController?.value;
+    _editingController?.addListener(_onEditingChanged);
     if (!_active) {
       _awaitingActivation = true;
       return;
@@ -245,7 +260,7 @@ class _AppPasswordInputState extends ConsumerState<AppPasswordInput>
   void dispose() {
     _revision++;
     WidgetsBinding.instance.removeObserver(this);
-    _editingController?.removeListener(_cancelRestore);
+    _editingController?.removeListener(_onEditingChanged);
     _focus.dispose();
     super.dispose();
   }

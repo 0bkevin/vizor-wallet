@@ -6,6 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zcash_wallet/src/core/input/app_password_input_source.dart';
 
+import 'package:zcash_wallet/src/core/theme/app_theme.dart';
+import 'package:zcash_wallet/src/features/settings/widgets/confirm_access_card.dart';
+
 import '../../fakes/fake_password_input_source.dart';
 
 void main() {
@@ -152,6 +155,68 @@ void main() {
       ),
     );
   }
+
+  testWidgets(
+    'viewing key card autofocus restores after cursor initialization',
+    (tester) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await service.remember(await service.capture());
+      final controller = TextEditingController();
+      addTearDown(controller.dispose);
+      expect(controller.selection.isValid, isFalse);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appPasswordInputSourceProvider.overrideWithValue(service),
+          ],
+          child: MaterialApp(
+            home: AppTheme(
+              data: AppThemeData.light,
+              child: Scaffold(
+                body: Center(
+                  child: ConfirmAccessCard(
+                    subtitle: 'To view the viewing key.',
+                    controller: controller,
+                    errorText: null,
+                    isSubmitting: false,
+                    canSubmit: false,
+                    onChanged: () {},
+                    onSubmit: () {},
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.selection, const TextSelection.collapsed(offset: 0));
+      expect(platform.restored, hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'IME composition change without text change cancels pending restore',
+    (tester) async {
+      await service.remember(await service.capture());
+      store.pendingRead = Completer();
+      await mount(tester);
+      await tester.tap(find.byKey(const Key('password')));
+      await tester.pump();
+      final editor = tester.widget<EditableText>(
+        find.descendant(
+          of: find.byKey(const Key('password')),
+          matching: find.byType(EditableText),
+        ),
+      );
+      editor.controller.value = editor.controller.value.copyWith(
+        composing: const TextRange.collapsed(0),
+      );
+      store.pendingRead!.complete(store.value);
+      await tester.pumpAndSettle();
+      expect(platform.restored, isEmpty);
+    },
+  );
 
   testWidgets('only opted-in field restores once; blur never switches back', (
     tester,
