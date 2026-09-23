@@ -316,7 +316,7 @@ pub(super) async fn run_enhancement(
                     let fee_result = tokio::select! {
                         biased;
                         _ = super::watch_for_exit(should_exit) => return Ok(ready_resubmission),
-                        result = fill_missing_fee(client, db_path, &tx) => result,
+                        result = fill_missing_fee(client, db_path, &tx, should_exit) => result,
                     };
                     if let Err(error) = fee_result {
                         log::warn!(
