@@ -155,6 +155,7 @@ class _UnlockScreenState extends ConsumerState<UnlockScreen> {
             ),
             child: DesktopUnlockContent(
               passwordController: _passwordController,
+              autofocus: true,
               canSubmit: _canSubmit,
               messageText: _errorText ?? _passwordPolicyMessage,
               onChanged: () {
