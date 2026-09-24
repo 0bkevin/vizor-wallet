@@ -49,6 +49,9 @@ mod address_history;
 mod block_source;
 mod claim_roots;
 pub(crate) mod enhancement;
+mod ephemeral_checks;
+#[cfg(test)]
+mod ephemeral_checks_tests;
 mod error;
 pub(crate) mod ledger_discovery;
 mod lwd;
@@ -4642,6 +4645,39 @@ async fn run_sync_impl(
                 phase_total_units: 0,
                 phase: String::new(),
             });
+        }
+    }
+
+    if !should_exit() {
+        match ephemeral_checks::run(
+            lightwalletd_url,
+            &mut db,
+            db_data_path,
+            network,
+            BlockHeight::from_u32(final_tip_height as u32),
+            &should_exit,
+        )
+        .await
+        {
+            Ok(true) => progress_fn(SyncProgressEvent {
+                scanned_height: final_scanned_height,
+                chain_tip_height: final_tip_height,
+                percentage: 1.0,
+                display_target_percentage: 1.0,
+                display_target_blocks: 0,
+                is_syncing: false,
+                is_complete: true,
+                has_new_tx: true,
+                phase_completed_units: 0,
+                phase_total_units: 0,
+                phase: String::new(),
+            }),
+            Ok(false) => {}
+            Err(error) => log::warn!(
+                "[{}] sync: ephemeral address check failed; it will retry on a later sync: {}",
+                elapsed(),
+                error,
+            ),
         }
     }
 

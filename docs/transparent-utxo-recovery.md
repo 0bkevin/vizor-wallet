@@ -96,14 +96,29 @@ No detached background task or new persistent scheduling state is introduced.
 This reduces duplicate requests and overlaps network waits; it does not lower
 spend-check frequency or promise a fourfold overall sync speedup.
 
+## Returned TEX funds
+
+ZIP 320 requires recognizing funds a TEX recipient returns to the pair's
+ephemeral source. The backend queues an unbounded check per ephemeral address
+and randomizes when each becomes due (about once a day). At the end of a sync,
+`ephemeral_checks` services at most one due check for an ephemeral address that
+a mined transaction funded, over its own channel (an isolated circuit when Tor is
+enabled), stores any transactions, and moves only that address's next check
+forward. The backend reschedule runs only when no used address is overdue,
+because it would otherwise push overdue checks into the future. Ephemeral
+addresses with no mined output, including those funded only by a first leg that
+never mined, are not queried. Debug builds treat scheduled checks as due
+when `ZCASH_E2E_EPHEMERAL_CHECKS_DUE_NOW` is set; the TEX send E2E uses this.
+
 ## Limits
 
 This searches addresses already generated within the wallet's supported gap
 windows. Newly generated children are eligible on a following sync. It does not
 reconstruct the use of fully spent historical addresses to cross arbitrary gaps.
 Software additional-account discovery still uses its existing birthday-bounded
-first-address history check. Ephemeral address scheduling, arbitrary derivation
-paths, Sprout shielded funds, and Keystone device signing are outside this change.
+first-address history check. Returned funds to ephemeral addresses used by
+another wallet sharing the seed, arbitrary derivation paths, Sprout shielded
+funds, and Keystone device signing are outside this change.
 
 ## Validation
 
