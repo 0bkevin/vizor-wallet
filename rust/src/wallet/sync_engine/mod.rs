@@ -54,11 +54,12 @@ mod error;
 pub(crate) mod ledger_discovery;
 mod lwd;
 pub(crate) mod mempool;
+pub(crate) mod status_pir;
 mod tip_cache;
 #[cfg(test)]
 mod transparent_recovery_tests;
 
-use enhance::run_enhancement;
+use enhance::run_transaction_data_requests;
 use enhance_pir::{EnhancePirRunError, EnhancePirSync};
 pub(crate) use error::SyncError;
 use error::{RecoveryStrategy, MAX_REWINDS_PER_RUN};
@@ -67,9 +68,9 @@ use lwd::{
     get_tree_state, get_tree_state_for_block,
 };
 pub(crate) use lwd::{
-    get_latest_block, get_taddress_txids, get_transaction, next_stream_message,
-    open_background_direct_lwd_channel, open_isolated_lwd_channel, open_lwd_channel,
-    open_lwd_channel_with_cancel, send_transaction, send_transaction_with_status,
+    get_latest_block, get_taddress_txids, next_stream_message, open_background_direct_lwd_channel,
+    open_isolated_lwd_channel, open_lwd_channel, open_lwd_channel_with_cancel, send_transaction,
+    send_transaction_with_status,
 };
 pub(crate) use tip_cache::{
     get_latest_block_recorded, latest_block_for_transaction,
@@ -3666,7 +3667,8 @@ async fn run_sync_impl(
                         .map_err(|e| SyncError::db(format!("transaction_data_requests: {e}")))?
                         .is_empty()
                     {
-                        let released = run_enhancement(
+                        let released = run_transaction_data_requests(
+
                             &mut client,
                             &mut db,
                             db_data_path,
@@ -3716,6 +3718,7 @@ async fn run_sync_impl(
                             completion_tip_validation_required = true;
                             continue;
                         }
+
                     }
                     if should_exit() {
                         return Ok(());
@@ -4227,7 +4230,8 @@ async fn run_sync_impl(
         // Legacy enhancement remains available for status and transparent
         // history. When private recovery is enabled, protected Ironwood
         // transactions never fall back to GetTransaction(txid).
-        let ready = run_enhancement(&mut client, &mut db, db_data_path, network, &should_exit).await?;
+        let ready = run_transaction_data_requests(&mut client, &mut db, db_data_path, network, &should_exit).await?;
+
         public_enhancement_after_scan = true;
 
         // Post-batch tip reconciliation and auto-resubmit. The resubmit calls
@@ -4249,7 +4253,7 @@ async fn run_sync_impl(
         //
         // Pre-flight guard matches the one at the startup resubmit
         // call site — if cancel or mode-change landed during
-        // `run_enhancement` (which can spend a second or two on a
+        // `run_transaction_data_requests` (which can spend a second or two on a
         // transparent-address scan), bail before opening a single
         // new `send_transaction` RPC. The helper also consults the
         // same closure between candidates and before each retry so
@@ -4503,7 +4507,8 @@ async fn run_sync_impl(
     // once at completion so disabling private recovery takes effect without
     // waiting for another block to arrive.
     if needs_completion_enhancement_pass(public_enhancement_after_scan) {
-        run_enhancement(&mut client, &mut db, db_data_path, network, &should_exit).await?;
+        run_transaction_data_requests(&mut client, &mut db, db_data_path, network, &should_exit)
+            .await?;
         if should_exit() {
             log::info!(
                 "[{}] sync: exiting during completion enhancement",
@@ -4666,8 +4671,14 @@ async fn run_sync_impl(
             ),
         }
         if deferred_received_outputs && !should_exit() {
-            if let Err(error) =
-                run_enhancement(&mut client, &mut db, db_data_path, network, &should_exit).await
+            if let Err(error) = run_transaction_data_requests(
+                &mut client,
+                &mut db,
+                db_data_path,
+                network,
+                &should_exit,
+            )
+            .await
             {
                 log::warn!(
                     "[{}] sync: deferred transparent transaction enhancement failed; it will retry on a later sync: {}",
