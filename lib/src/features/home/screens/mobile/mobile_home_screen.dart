@@ -30,6 +30,7 @@ import '../../../../providers/voting/voting_config_source_provider.dart';
 import '../../../../providers/migration_send_gate_provider.dart';
 import '../../../../providers/privacy_mode_provider.dart';
 import '../../../../providers/rpc_endpoint_provider.dart';
+import '../../../../providers/sync_failure.dart';
 import '../../../../providers/sync_keep_awake_provider.dart';
 import '../../../../providers/sync_display_progress_provider.dart';
 import '../../../../providers/sync_provider.dart';
@@ -1126,6 +1127,13 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
         kMobileTabBarHeight + AppSpacing.lg,
       ),
       children: [
+        if (sync.failure?.kind == SyncFailureKind.privateStatusCoverage) ...[
+          _PrivateStatusCoverageNotice(
+            message: sync.failure!.userMessage,
+            onSettings: () => context.push('/settings'),
+          ),
+          const SizedBox(height: AppSpacing.s),
+        ],
         Column(
           children: [
             _BalanceCard(
@@ -1289,6 +1297,56 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _PrivateStatusCoverageNotice extends StatelessWidget {
+  const _PrivateStatusCoverageNotice({
+    required this.message,
+    required this.onSettings,
+  });
+
+  final String message;
+  final VoidCallback onSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
+      key: const ValueKey('mobile_private_status_coverage_notice'),
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: colors.background.ground,
+        borderRadius: BorderRadius.circular(AppRadii.large),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AppIcon(AppIcons.warning, size: 20, color: colors.text.warning),
+              const SizedBox(width: AppSpacing.s),
+              Expanded(
+                child: Text(
+                  message,
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: colors.text.warning,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s),
+          AppButton(
+            key: const ValueKey('mobile_private_status_coverage_settings'),
+            variant: AppButtonVariant.secondary,
+            onPressed: onSettings,
+            child: const Text('Settings'),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1116,7 +1116,7 @@ class _EnhancePirPrivacyControl extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
-                        'Private Ironwood recovery',
+                        'Private queries',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppTypography.labelLarge.copyWith(
@@ -1142,7 +1142,7 @@ class _EnhancePirPrivacyControl extends StatelessWidget {
                   key: const ValueKey('settings_enhance_pir_toggle'),
                   trackKey: const ValueKey('settings_enhance_pir_toggle_track'),
                   enabled: enabled,
-                  semanticsLabel: 'Private Ironwood recovery',
+                  semanticsLabel: 'Private queries',
                   onToggle: onToggle,
                 ),
               ],

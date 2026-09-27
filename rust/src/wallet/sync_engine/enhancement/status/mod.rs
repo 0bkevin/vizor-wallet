@@ -3,8 +3,9 @@
 //! A reader selects exactly one source for its lifetime. When private Status
 //! PIR is selected, initialization or observation failure is inconclusive and
 //! must not fall back to a public transaction-ID request. It also never fails
-//! the sync: the work stays durable and private status is skipped for the rest
-//! of the session, so a lagging or unreachable service cannot stall scanning.
+//! the sync, except for the explicit coverage feedback gate: other work stays
+//! durable and private status is skipped for the rest of the session, so a
+//! lagging or unreachable service cannot stall scanning.
 
 mod private;
 mod public;
@@ -148,10 +149,14 @@ where
                 });
                 observation.into()
             }
-            Err(StatusError::CoverageIncomplete) => {
+            Err(StatusError::CoverageIncomplete) if is_private(&work) => {
                 observability::record(|c| c.status_incomplete += 1);
-                log::debug!("Status coverage incomplete; deferring pending observation");
-                continue;
+                // GetStatus work is expected to be highly unlikely in private
+                // mode. Temporarily fail visibly so this feedback gate detects
+                // real occurrences; if users encounter it, we will design the
+                // complete negative-coverage recovery instead of silently
+                // weakening privacy.
+                return Err(SyncError::PrivateStatusCoverageIncomplete);
             }
             Err(StatusError::Cancelled) => return Ok(actionable),
             Err(error) if is_private(&work) => {

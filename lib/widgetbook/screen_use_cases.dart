@@ -1562,7 +1562,6 @@ Widget buildDesktopHomeSidebarSyncNetworkErrorUseCase(BuildContext context) {
         kind: SyncFailureKind.network,
         rawMessage: 'network failed',
         userMessage: 'Network connection lost.',
-        showSettingsAction: false,
       ),
     ),
     migrationCta: const IronwoodHomeMigrationCtaState.hidden(),

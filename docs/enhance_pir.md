@@ -1,7 +1,7 @@
 # Private Ironwood transaction enhancement
 
-Private Ironwood recovery is off by default and available on mainnet under
-**Settings → Privacy → Private Ironwood recovery**. It uses randomized iPIR queries
+Private queries are off by default and available on mainnet under
+**Settings → Privacy → Private queries**. They use randomized iPIR queries
 for protected Ironwood transactions. Durable transaction-wide protection withholds
 ordinary `GetTransaction(txid)` enhancement independently of whether private work
 is active, suspended, or already finished. Mixed-pool transactions and the existing

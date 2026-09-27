@@ -1201,7 +1201,7 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
       } catch (e, st) {
         recordError('secure storage wipe', e, st);
       }
-      // Private Ironwood recovery is install-scoped and is deliberately NOT
+      // Private queries are install-scoped and are deliberately NOT
       // cleared here: it lives outside the secure-store bucket the wipe above
       // destroyed, so the next wallet starts on the route the user chose. The
       // Tor route preference below is the opposite case — it is removed as

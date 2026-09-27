@@ -73,10 +73,14 @@ match locally scanned wallet state. The query is routed over the existing
 Tor/direct policy; iOS background work uses its direct route. The result maps
 to the same four internal observations. Uncovered txids, stale generations,
 malformed rows, transport failures, and cancellation leave status work
-inconclusive. An inconclusive private lookup never fails the foreground sync:
-the obligation stays durable, and after the first failure other than coverage
-the session stops querying the private service until the next sync. A
-lightwalletd failure for public status work still fails the sync as before.
+inconclusive. Most inconclusive private failures do not fail foreground sync:
+the obligation stays durable, and the session stops querying the private
+service until the next sync. The deliberate exception is
+`CoverageIncomplete`, which trips a user-visible feedback gate after bounded
+retry. Vizor links to Settings, where the user may disable private queries;
+automatic sync retries remain paused until that decision, and Vizor
+never switches to public status automatically. A lightwalletd
+failure for public status work still fails the sync as before.
 The native iOS ABI adds a private entrypoint while retaining the public one.
 
 Each lookup carries the wallet's chain tip as its decision height. When the
@@ -94,6 +98,12 @@ covers the run's decision height, together with the expiry check. The service
 records carry no inclusion proof, so this retirement trusts the service's
 absence claim. Runs created before creation evidence existed have no
 earliest-inclusion bound and stay pending in private mode.
+
+`GetStatus` work is expected to be highly unlikely in private mode. The
+coverage feedback gate temporarily makes real occurrences visible without
+silently weakening privacy. If production users encounter it, the negative
+coverage and recovery semantics need a complete design rather than an
+automatic public fallback.
 
 The iOS background preparation task does not track confirmations while private
 recovery is on. The background task cannot advance the wallet's scanned state,

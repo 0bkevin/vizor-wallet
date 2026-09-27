@@ -175,7 +175,7 @@ class MobileNetworkPrivacyCard extends ConsumerWidget {
             Semantics(
               button: true,
               toggled: enhancePirEnabled,
-              label: 'Private Ironwood recovery',
+              label: 'Private queries',
               onTap: changingRecovery
                   ? null
                   : () => unawaited(
@@ -213,7 +213,7 @@ class MobileNetworkPrivacyCard extends ConsumerWidget {
                         const SizedBox(width: AppSpacing.s),
                         Expanded(
                           child: Text(
-                            'Private Ironwood recovery',
+                            'Private queries',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: AppTypography.labelLarge.copyWith(

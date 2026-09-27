@@ -31,6 +31,13 @@ bool isSyncPreparationPhase(String phase) =>
     phase == kSyncPhaseActiveUtxo ||
     phase == kSyncPhaseChainPrepare;
 
+bool shouldPauseSyncForPrivateStatusCoverage({
+  required SyncFailure? failure,
+  required bool privateQueriesEnabled,
+}) =>
+    privateQueriesEnabled &&
+    failure?.kind == SyncFailureKind.privateStatusCoverage;
+
 class SyncProgressEvent {
   final int scannedHeight;
   final int chainTipHeight;
@@ -1160,6 +1167,14 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
   /// Stream events update state via _onSyncProgress. Completion handled by _onSyncDone.
   void startSync({int? latestTipHeight}) {
     if (_isShuttingDown) return;
+    if (_privateStatusCoverageNeedsSettings()) {
+      _stopPolling();
+      log(
+        'Sync: private status coverage needs a Settings decision; '
+        'automatic restart paused',
+      );
+      return;
+    }
     // A wallet mutation owns the DB: account deletion, a reset, or the
     // recovery toggle. Hand the start to whichever pause exits last; a reset
     // that opts out discards it.
@@ -2065,9 +2080,22 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
 
   // ======================== Polling ========================
 
+  bool _privateStatusCoverageNeedsSettings() {
+    final failure = state.value?.failure;
+    if (failure?.kind != SyncFailureKind.privateStatusCoverage) return false;
+    return shouldPauseSyncForPrivateStatusCoverage(
+      failure: failure,
+      privateQueriesEnabled: ref.read(enhancePirProvider),
+    );
+  }
+
   void _startPolling() {
     _pollTimer?.cancel();
     if (_isShuttingDown) return;
+    if (_privateStatusCoverageNeedsSettings()) {
+      _pollTimer = null;
+      return;
+    }
     if (!canRunAppProcessWork(isInForeground: _isInForeground)) return;
     _pollTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
       try {
@@ -2086,6 +2114,10 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
   Future<void> _checkAndSync() async {
     if (_isShuttingDown) return;
     if (_recoverySettingTransition || _walletMutationPauseCount > 0) return;
+    if (_privateStatusCoverageNeedsSettings()) {
+      _stopPolling();
+      return;
+    }
     final gen = _syncGen;
     final epoch = _sensitiveStateEpoch;
     final hasAccounts = ref.read(accountProvider).value?.hasAccounts ?? false;

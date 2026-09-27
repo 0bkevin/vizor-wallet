@@ -227,7 +227,7 @@ Private Status PIR validates:
 4. coverage constraints for the requested observation,
 5. the anchor again after the query.
 
-HTTP 409/410 permits one private-session refresh. Other failures remain
+HTTP 409/410 permits one private-session refresh. Most other failures remain
 inconclusive and never fail the sync. After the first private failure other
 than coverage, the session stops querying the private service and leaves the
 remaining private status work pending until the next sync.
@@ -237,6 +237,13 @@ snapshot anchor is below it, the lookup drops the bound and accepts only
 positive records; a missing record is then `CoverageIncomplete`. `Mempool` and
 `Forked` are distinct source observations but both persist as the wallet's
 not-in-main-chain state.
+
+`CoverageIncomplete` is an explicit, retryable feedback gate. `GetStatus` work
+is expected to be highly unlikely in private mode, so Vizor surfaces a clear
+Settings action and pauses automatic sync after bounded retry instead of
+silently weakening privacy. If production users encounter the gate, its
+complete negative-coverage recovery needs a dedicated design; there is no
+automatic public fallback.
 
 ## Transparent history and fees
 

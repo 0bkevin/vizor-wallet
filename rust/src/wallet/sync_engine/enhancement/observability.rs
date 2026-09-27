@@ -195,6 +195,7 @@ pub(super) fn error_kind(error: &SyncError) -> &'static str {
     match error {
         SyncError::Continuity { .. } => "continuity",
         SyncError::Network(_) => "network",
+        SyncError::PrivateStatusCoverageIncomplete => "private_status_coverage",
         SyncError::Db(_) => "db",
         SyncError::Parse(_) => "parse",
         SyncError::Other(_) => "other",

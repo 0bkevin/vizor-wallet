@@ -221,7 +221,7 @@ Future<Widget> buildBootstrappedZcashWalletApp({
   );
 }
 
-/// Applies the saved private Ironwood recovery setting to Rust and to native
+/// Applies the saved private queries setting to Rust and to native
 /// background work before any sync or background preparation can start.
 ///
 /// A blocked bootstrap applies nothing. Its state carries defaults, not the

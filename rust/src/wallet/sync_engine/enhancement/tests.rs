@@ -663,7 +663,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn incomplete_private_status_is_deferred_once_per_checkpoint_without_public_fallback() {
+    async fn incomplete_private_status_trips_feedback_gate_without_public_fallback() {
         use zakura_transaction_status::{StatusError, StatusObservation};
         let (file, mut db, tx) =
             scanned_transaction_missing_fee_test_db(BlockHeight::from_u32(100));
@@ -682,26 +682,18 @@ mod tests {
         let requests = private.requests.clone();
         let mut reader = super::super::status::RoutedStatusReader::new(public, private);
         let mut attempted = std::collections::HashSet::new();
-        assert!(super::super::status::run_requests(
-            &mut reader,
-            &mut db,
-            &work,
-            &mut attempted,
-            &mut false,
-            &|| false
-        )
-        .await
-        .unwrap());
-        assert!(!super::super::status::run_requests(
-            &mut reader,
-            &mut db,
-            &work,
-            &mut attempted,
-            &mut false,
-            &|| false
-        )
-        .await
-        .unwrap());
+        assert!(matches!(
+            super::super::status::run_requests(
+                &mut reader,
+                &mut db,
+                &work,
+                &mut attempted,
+                &mut false,
+                &|| false
+            )
+            .await,
+            Err(SyncError::PrivateStatusCoverageIncomplete)
+        ));
         assert_eq!(public_opens.load(std::sync::atomic::Ordering::SeqCst), 0);
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 1);

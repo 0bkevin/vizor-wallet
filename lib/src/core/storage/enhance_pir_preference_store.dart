@@ -1,6 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Install-scoped preference key for private Ironwood recovery.
+/// Install-scoped preference key for private queries.
 ///
 /// This lives in [SharedPreferences] rather than the `AppSecureStore`
 /// plaintext lane on purpose: the secure-store bucket is wiped wholesale by
@@ -42,9 +42,7 @@ class SharedPreferencesEnhancePirStore implements EnhancePirPreferenceStore {
         enabled,
       );
       if (!saved) {
-        throw StateError(
-          'Could not save the private Ironwood recovery setting.',
-        );
+        throw StateError('Could not save the private queries setting.');
       }
     } catch (_) {
       // SharedPreferences changes its memory cache before the platform write.

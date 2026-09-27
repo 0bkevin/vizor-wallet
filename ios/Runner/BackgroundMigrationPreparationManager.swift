@@ -3,7 +3,7 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// App-wide private Ironwood recovery setting as last applied by Dart.
+/// App-wide private queries setting as last applied by Dart.
 ///
 /// Dart writes the effective value (preference and network availability) at
 /// startup and on every toggle. A missing or unreadable value counts as private,

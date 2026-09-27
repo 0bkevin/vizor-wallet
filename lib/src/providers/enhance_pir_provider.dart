@@ -31,8 +31,8 @@ final enhancePirPreferenceStoreProvider = Provider<EnhancePirPreferenceStore>(
   (_) => const SharedPreferencesEnhancePirStore(),
 );
 
-/// Private Ironwood recovery is an **install-scoped** preference: it is chosen
-/// once and applies to every wallet that lives on this device, including a
+/// Private queries are an **install-scoped** preference: they are chosen
+/// once and apply to every wallet that lives on this device, including a
 /// wallet created after a full reset. It is stored outside the secure-store
 /// bucket that `AppSecureStore.deleteAll()` wipes, and the reset path
 /// deliberately leaves it alone — see [kEnhancePirEnabledPreferenceKey].

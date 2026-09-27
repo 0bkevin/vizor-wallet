@@ -576,7 +576,7 @@ void main() {
     );
     await tester.scrollUntilVisible(pirThumb, 200);
     expect(find.text('Advanced'), findsNothing);
-    expect(find.text('Private Ironwood recovery'), findsOneWidget);
+    expect(find.text('Private queries'), findsOneWidget);
     expect(tester.getSize(pirThumb), tester.getSize(torThumb));
     expect(tester.getSize(pirTrack), tester.getSize(torTrack));
   });
@@ -618,13 +618,11 @@ void main() {
     }
   });
 
-  testWidgets('private Ironwood recovery is hidden off mainnet', (
-    tester,
-  ) async {
+  testWidgets('private queries are hidden off mainnet', (tester) async {
     await tester.pumpWidget(_app(network: 'regtest', enhancePirEnabled: true));
     await tester.pumpAndSettle();
 
-    expect(find.text('Private Ironwood recovery'), findsNothing);
+    expect(find.text('Private queries'), findsNothing);
     expect(
       find.byKey(const ValueKey('mobile_settings_enhance_pir_toggle')),
       findsNothing,
