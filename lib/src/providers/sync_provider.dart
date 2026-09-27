@@ -628,10 +628,16 @@ class WalletMutationSyncPause {
   final bool hadPolling;
   final bool hadMempoolObserver;
 
+  /// The wallet reset epoch when this pause was taken. A reset that exits
+  /// while this pause is held advances the epoch, and the snapshot above then
+  /// describes a wallet that no longer exists.
+  final int resetEpoch;
+
   const WalletMutationSyncPause({
     required this.hadActiveSync,
     required this.hadPolling,
     required this.hadMempoolObserver,
+    this.resetEpoch = 0,
   });
 
   bool get hadWorkToPause => hadActiveSync || hadPolling || hadMempoolObserver;
@@ -787,6 +793,9 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
   final RecoveryRestartGate _recoveryRestartGate = RecoveryRestartGate();
   int _walletMutationPauseCount = 0;
   bool _pendingMutationRestartSync = false;
+  // Advanced by every opt-out pause exit (a wallet reset). Pauses taken before
+  // it cannot restart sync: their snapshots describe the deleted wallet.
+  int _walletResetEpoch = 0;
   bool _pendingMutationRestartPolling = false;
   int _recoveryStatusReadCount = 0;
   Completer<void>? _recoveryStatusReadsDrained;
@@ -1754,6 +1763,7 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
       hadActiveSync: _isSyncing || rust_sync.isSyncRunning(),
       hadPolling: _pollTimer != null || _pollCheckInFlight,
       hadMempoolObserver: rust_sync.isMempoolObserverRunning(),
+      resetEpoch: _walletResetEpoch,
     );
   }
 
@@ -1801,7 +1811,18 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
   /// Exit a pause without resuming. Destructive callers use this when the
   /// wallet DB may already be gone, so it also discards any restart another
   /// pause deferred: nothing should sync a wallet that was just reset.
-  void endWalletMutationPause() => _endWalletMutationPause(resume: false);
+  ///
+  /// That holds even when this is not the last pause to exit. The reset
+  /// advances the epoch, so a pause taken before it (the recovery toggle,
+  /// say) cannot restart sync from its pre-reset snapshot when it exits
+  /// later. A start requested after the reset — a new wallet's first sync —
+  /// is still deferred to the last exit as usual.
+  void endWalletMutationPause() {
+    _walletResetEpoch++;
+    _pendingMutationRestartSync = false;
+    _pendingMutationRestartPolling = false;
+    _endWalletMutationPause(resume: false);
+  }
 
   void _endWalletMutationPause({required bool resume}) {
     if (_walletMutationPauseCount > 0) {
@@ -1933,10 +1954,18 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
   /// [forceRestart] resumes sync and polling regardless of what the pause
   /// snapshot captured — the recovery toggle stops sync itself, so it must
   /// bring it back even when nothing was running when it took the pause.
+  ///
+  /// A pause that outlived a wallet reset contributes neither its snapshot
+  /// nor [forceRestart]: both describe the deleted wallet. It only releases
+  /// its count, which still fires any start requested after the reset.
   void resumeAfterWalletMutation(
     WalletMutationSyncPause pause, {
     bool forceRestart = false,
   }) {
+    if (pause.resetEpoch != _walletResetEpoch) {
+      _endWalletMutationPause(resume: true);
+      return;
+    }
     _pendingMutationRestartSync |=
         forceRestart || pause.hadActiveSync || pause.hadMempoolObserver;
     _pendingMutationRestartPolling |=

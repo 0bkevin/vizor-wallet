@@ -440,6 +440,22 @@ void main() {
       expect(sync.starts, 0);
     });
 
+    test('a reset nested inside a toggle cancels the toggle restart', () async {
+      // The toggle pauses first; a full reset pauses inside it, deletes the
+      // wallet, and exits first with the opt-out.
+      final toggle = await sync.pauseForWalletMutation();
+      final reset = await sync.pauseForWalletMutation();
+      expect(reset.hadWorkToPause, isFalse);
+      sync.endWalletMutationPause();
+
+      sync.resumeAfterWalletMutation(toggle, forceRestart: true);
+      expect(
+        sync.starts,
+        0,
+        reason: 'the toggle snapshot names a deleted wallet',
+      );
+    });
+
     test('a lone pause restarts immediately', () async {
       final toggle = await sync.pauseForWalletMutation();
       sync.resumeAfterWalletMutation(toggle, forceRestart: true);
@@ -525,6 +541,37 @@ void main() {
 
       sync.resumeAfterWalletMutation(deletion);
       expect(sync.attempts, 2);
+    });
+
+    test('a start requested before a nested reset is dropped', () async {
+      final toggle = await sync.pauseForWalletMutation();
+      api.running = true;
+      sync.startSync(); // deferred: the toggle owns the DB
+      expect(sync.attempts, 1);
+
+      await sync.pauseForWalletMutation(); // the reset
+      sync.endWalletMutationPause();
+
+      sync.resumeAfterWalletMutation(toggle);
+      expect(sync.attempts, 1, reason: 'that start was for the deleted wallet');
+    });
+
+    test('a start requested after a nested reset still runs', () async {
+      final toggle = await sync.pauseForWalletMutation();
+      await sync.pauseForWalletMutation(); // the reset
+      sync.endWalletMutationPause();
+
+      // A new wallet is created while the toggle is still held.
+      api.running = true;
+      sync.startSync();
+      expect(sync.attempts, 1);
+
+      sync.resumeAfterWalletMutation(toggle, forceRestart: true);
+      expect(
+        sync.attempts,
+        2,
+        reason: 'the new wallet still gets its first sync on the last exit',
+      );
     });
 
     test('a reset that opts out discards a refused start', () async {
