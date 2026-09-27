@@ -100,10 +100,10 @@ recovery is on. The background task cannot advance the wallet's scanned state,
 so it can never accept a Status PIR anchor. Confirmations are observed when
 Vizor is open instead.
 
-The Status PIR integration remains unqualified for production. Synthetic
-qualification is not proof of live ingestion or durable publication; the
-wallet client and service must agree on the current wire protocol and pass
-live-source qualification before setting the release gate.
+Status PIR is qualified for production and has no release gate of its own. On
+mainnet, the private recovery preference (`EnhancementPolicy`) selects private
+status and private payload recovery together; it is unavailable off mainnet and
+in `ironwood_masquerade` builds.
 No public `GetStatus` wire RPC is planned.
 
 Tests cover response identity and height validation, explicit absence versus
