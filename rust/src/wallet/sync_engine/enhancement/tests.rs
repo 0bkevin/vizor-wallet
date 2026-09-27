@@ -707,6 +707,69 @@ mod tests {
         );
     }
 
+    /// A durable private status obligation with no payload work must still
+    /// count toward a recovery-only restart, or a deferred Status PIR failure
+    /// is never retried until a new block or a manual action.
+    #[test]
+    fn recovery_status_counts_private_status_obligations() {
+        let (file, mut db, tx) =
+            scanned_transaction_missing_fee_test_db(BlockHeight::from_u32(100));
+        let conn = rusqlite::Connection::open(file.path()).unwrap();
+        conn.execute("UPDATE transactions SET mined_height = NULL", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO tx_retrieval_queue (txid, query_type) VALUES (?1, 0)
+             ON CONFLICT (txid, query_type) DO NOTHING",
+            rusqlite::params![tx.txid().as_ref()],
+        )
+        .unwrap();
+
+        db.set_status_mode(TransactionStatusMode::Private);
+        let status = super::super::recovery_status_for(&db, String::new()).unwrap();
+        assert_eq!(status.status, 1, "the private obligation is recovery work");
+
+        // A public status failure fails the sync instead of being deferred, so
+        // public status work never needs a recovery-only restart.
+        db.set_status_mode(TransactionStatusMode::Public);
+        let status = super::super::recovery_status_for(&db, String::new()).unwrap();
+        assert_eq!(status.status, 0);
+    }
+
+    /// Migration creation evidence records an earliest-inclusion bound only.
+    /// It queues no status or payload work, so retiring an unbroadcast run
+    /// leaves nothing for a later sync to query.
+    #[test]
+    fn migration_creation_evidence_alone_queues_no_work() {
+        use zcash_client_backend::data_api::enhance_pir::EnhancePirRead;
+        use zcash_client_backend::data_api::status::TransactionStatusWrite;
+        let (_file, mut db, _tx) =
+            scanned_transaction_missing_fee_test_db(BlockHeight::from_u32(100));
+        let txid = TxId::from_bytes([0x5a; 32]);
+        db.record_transaction_created(txid, BlockHeight::from_u32(90))
+            .unwrap();
+        for mode in [
+            TransactionStatusMode::Private,
+            TransactionStatusMode::Public,
+        ] {
+            db.set_status_mode(mode);
+            assert!(!db
+                .transaction_status_work()
+                .unwrap()
+                .iter()
+                .any(|work| work.txid() == txid));
+            assert!(!db
+                .transaction_enhancement_work()
+                .unwrap()
+                .iter()
+                .any(|work| work.txid() == txid));
+            let status = super::super::recovery_status_for(&db, String::new()).unwrap();
+            assert_eq!(
+                (status.status, status.queries, status.rediscovery),
+                (0, 0, 0)
+            );
+        }
+    }
+
     fn private_status_work_db() -> (tempfile::NamedTempFile, WalletDatabase, TxId) {
         let (file, mut db, tx) =
             scanned_transaction_missing_fee_test_db(BlockHeight::from_u32(100));

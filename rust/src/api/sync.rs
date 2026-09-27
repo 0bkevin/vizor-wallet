@@ -3040,6 +3040,10 @@ pub struct EnhanceRecoveryStatus {
     pub queries: u32,
     pub rediscovery: u32,
     pub suspended: u32,
+    /// Private transaction-status obligations still awaiting Status PIR. A
+    /// deferred private status failure leaves these durable without payload
+    /// work, so they count toward a recovery-only sync restart.
+    pub status: u32,
     pub service_state: String,
 }
 pub fn get_enhance_recovery_status(

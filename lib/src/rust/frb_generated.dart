@@ -22538,13 +22538,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EnhanceRecoveryStatus dco_decode_enhance_recovery_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return EnhanceRecoveryStatus(
       queries: dco_decode_u_32(arr[0]),
       rediscovery: dco_decode_u_32(arr[1]),
       suspended: dco_decode_u_32(arr[2]),
-      serviceState: dco_decode_String(arr[3]),
+      status: dco_decode_u_32(arr[3]),
+      serviceState: dco_decode_String(arr[4]),
     );
   }
 
@@ -22555,11 +22556,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_queries = sse_decode_u_32(deserializer);
     var var_rediscovery = sse_decode_u_32(deserializer);
     var var_suspended = sse_decode_u_32(deserializer);
+    var var_status = sse_decode_u_32(deserializer);
     var var_serviceState = sse_decode_String(deserializer);
     return EnhanceRecoveryStatus(
       queries: var_queries,
       rediscovery: var_rediscovery,
       suspended: var_suspended,
+      status: var_status,
       serviceState: var_serviceState,
     );
   }
@@ -22572,6 +22575,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.queries, serializer);
     sse_encode_u_32(self.rediscovery, serializer);
     sse_encode_u_32(self.suspended, serializer);
+    sse_encode_u_32(self.status, serializer);
     sse_encode_String(self.serviceState, serializer);
   }
 

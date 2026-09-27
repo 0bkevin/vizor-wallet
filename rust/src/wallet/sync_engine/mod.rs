@@ -6296,10 +6296,29 @@ pub(crate) fn enhance_recovery_status(
     path: &str,
     network: WalletNetwork,
 ) -> Result<crate::api::sync::EnhanceRecoveryStatus, String> {
-    use zcash_client_backend::data_api::enhance_pir::EnhancePirRead;
     let mut db = open_wallet_db_readonly_with_timeout(path, network, READ_DB_BUSY_TIMEOUT)?;
     EnhancementPolicy::current(network).configure_db(&mut db);
+    recovery_status_for(&db, enhancement::phase(path))
+}
+
+/// Counts recovery work in a database already configured with the current
+/// enhancement policy.
+fn recovery_status_for(
+    db: &WalletDatabase,
+    service_state: String,
+) -> Result<crate::api::sync::EnhanceRecoveryStatus, String> {
+    use zcash_client_backend::data_api::enhance_pir::EnhancePirRead;
     use zcash_client_backend::data_api::enhance_pir::TransactionEnhancementWork;
+    use zcash_client_backend::data_api::status::{TransactionStatusRead, TransactionStatusWork};
+    // `run_requests` defers private status failures for the session while the
+    // obligation stays durable. Without counting it here, a wallet with no
+    // payload work would never schedule the retry once Status PIR recovers.
+    let status = db
+        .transaction_status_work()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|work| matches!(work, TransactionStatusWork::Private(_)))
+        .count();
     let work = zakura_pir_enhance::wallet::PreparedWork::new(
         db.transaction_enhancement_work()
             .map_err(|e| e.to_string())?
@@ -6313,6 +6332,7 @@ pub(crate) fn enhance_recovery_status(
         queries: work.query_count() as u32,
         rediscovery: work.rediscover.len() as u32,
         suspended: work.suspended as u32,
-        service_state: enhancement::phase(path),
+        status: status as u32,
+        service_state,
     })
 }

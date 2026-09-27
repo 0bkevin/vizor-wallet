@@ -46,6 +46,7 @@ class _Api extends RustLibApi {
             queries: 0,
             rediscovery: 0,
             suspended: 0,
+            status: 0,
             serviceState: '',
           ),
         );
@@ -585,6 +586,29 @@ void main() {
     });
   });
 
+  test('deferred private status work counts toward a recovery restart', () {
+    const statusOnly = EnhanceRecoveryStatus(
+      queries: 0,
+      rediscovery: 0,
+      suspended: 0,
+      status: 1,
+      serviceState: '',
+    );
+    expect(recoveryRestartUnits(statusOnly), 1);
+    expect(
+      RecoveryRestartGate().shouldRestart(recoveryRestartUnits(statusOnly)),
+      isTrue,
+    );
+    const suspendedOnly = EnhanceRecoveryStatus(
+      queries: 0,
+      rediscovery: 0,
+      suspended: 2,
+      status: 0,
+      serviceState: '',
+    );
+    expect(recoveryRestartUnits(suspendedOnly), 0);
+  });
+
   group('RecoveryRestartGate', () {
     late DateTime clock;
     RecoveryRestartGate gate() => RecoveryRestartGate(now: () => clock);
@@ -793,6 +817,7 @@ void main() {
           queries: 1,
           rediscovery: 0,
           suspended: 0,
+          status: 0,
           serviceState: 'recovering',
         ),
       );

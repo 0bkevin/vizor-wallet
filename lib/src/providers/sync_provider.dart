@@ -654,6 +654,13 @@ bool shouldStartSyncForPolledTip(
       latestTipHeight > (current?.chainTipHeight ?? 0);
 }
 
+/// Retryable recovery obligations: payload queries, rediscovery jobs, and
+/// private status lookups that a Status PIR failure deferred. Suspended work
+/// is not retryable and is excluded.
+@visibleForTesting
+int recoveryRestartUnits(rust_sync.EnhanceRecoveryStatus recovery) =>
+    recovery.queries + recovery.rediscovery + recovery.status;
+
 @visibleForTesting
 const kRecoveryRestartInitialBackoff = Duration(seconds: 30);
 @visibleForTesting
@@ -2188,9 +2195,7 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
         // Leave the gate's deadline alone rather than clearing it.
         recoveryRestart =
             recovery != null &&
-            _recoveryRestartGate.shouldRestart(
-              recovery.queries + recovery.rediscovery,
-            );
+            _recoveryRestartGate.shouldRestart(recoveryRestartUnits(recovery));
       }
       if (shouldStartSyncForPolledTip(
         current,

@@ -1359,12 +1359,18 @@ class EnhanceRecoveryStatus {
   final int queries;
   final int rediscovery;
   final int suspended;
+
+  /// Private transaction-status obligations still awaiting Status PIR. A
+  /// deferred private status failure leaves these durable without payload
+  /// work, so they count toward a recovery-only sync restart.
+  final int status;
   final String serviceState;
 
   const EnhanceRecoveryStatus({
     required this.queries,
     required this.rediscovery,
     required this.suspended,
+    required this.status,
     required this.serviceState,
   });
 
@@ -1373,6 +1379,7 @@ class EnhanceRecoveryStatus {
       queries.hashCode ^
       rediscovery.hashCode ^
       suspended.hashCode ^
+      status.hashCode ^
       serviceState.hashCode;
 
   @override
@@ -1383,6 +1390,7 @@ class EnhanceRecoveryStatus {
           queries == other.queries &&
           rediscovery == other.rediscovery &&
           suspended == other.suspended &&
+          status == other.status &&
           serviceState == other.serviceState;
 }
 
