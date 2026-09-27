@@ -2170,6 +2170,12 @@ pub(crate) async fn retire_unbroadcast_orchard_migration(
 ) -> Result<(), String> {
     use zakura_transaction_status::{lightwalletd::LightwalletdSource, StatusObservation};
     let _migration_guard = ActiveIronwoodMigration::acquire(db_path, account_uuid)?;
+    super::migration::backfill_unbroadcast_migration_creation_evidence(
+        db_path,
+        account_uuid,
+        network,
+        expected_run_id,
+    )?;
     let candidates = super::migration::unbroadcast_migration_recovery_candidates(
         db_path,
         account_uuid,

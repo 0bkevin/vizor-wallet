@@ -2083,15 +2083,14 @@ pub(crate) fn schedule_block_offset_for_part(
         .map(|entry| entry.block_offset)
 }
 
-// Persist original construction evidence with the encrypted outbox, before any broadcast.
-// The current scheduled height can move on retries and is deliberately not used here.
-fn record_pending_creation(
+fn record_creation_evidence(
     tx: &rusqlite::Transaction<'_>,
     network: WalletNetwork,
-    pending: &PendingMigrationTxInsert,
+    txid_hex: &str,
+    target_height: u32,
 ) -> Result<(), String> {
     use zcash_client_backend::data_api::status::TransactionStatusWrite;
-    let mut bytes: [u8; 32] = hex::decode(&pending.txid_hex)
+    let mut bytes: [u8; 32] = hex::decode(txid_hex)
         .map_err(|e| e.to_string())?
         .try_into()
         .map_err(|_| "Invalid migration txid length")?;
@@ -2099,9 +2098,19 @@ fn record_pending_creation(
     let mut db = zcash_client_sqlite::WalletDb::from_connection(&**tx, network, (), ());
     db.record_transaction_created(
         zcash_primitives::transaction::TxId::from_bytes(bytes),
-        BlockHeight::from_u32(pending.target_height),
+        BlockHeight::from_u32(target_height),
     )
     .map_err(|e| format!("Record migration creation evidence: {e}"))
+}
+
+// Persist original construction evidence with the encrypted outbox, before any broadcast.
+// The current scheduled height can move on retries and is deliberately not used here.
+fn record_pending_creation(
+    tx: &rusqlite::Transaction<'_>,
+    network: WalletNetwork,
+    pending: &PendingMigrationTxInsert,
+) -> Result<(), String> {
+    record_creation_evidence(tx, network, &pending.txid_hex, pending.target_height)
 }
 
 fn insert_pending_txs_with_tx(
@@ -3374,6 +3383,58 @@ pub(crate) fn unbroadcast_migration_recovery_candidates(
         return Err("Migration recovery has no unconfirmed transactions".to_string());
     }
     Ok(candidates)
+}
+
+/// Repairs creation provenance for outbox rows written before atomic evidence
+/// recording was introduced. This must run before private status recovery:
+/// `target_height` is the immutable construction bound, while the scheduled
+/// height may have moved after retries.
+pub(crate) fn backfill_unbroadcast_migration_creation_evidence(
+    db_path: &str,
+    account_uuid: &str,
+    network: WalletNetwork,
+    expected_run_id: &str,
+) -> Result<(), String> {
+    with_wallet_db_write_lock("migration.backfill_creation_evidence", || {
+        let conn = open_wallet_raw_conn_with_timeout(db_path, WALLET_DB_BUSY_TIMEOUT)?;
+        ensure_schema(&conn)?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("Begin migration creation evidence backfill: {e}"))?;
+        let run = active_run(&tx, account_uuid, network)?
+            .ok_or("No active migration run is available for recovery")?;
+        if run.run_id != expected_run_id {
+            return Err(format!(
+                "Migration recovery run changed: expected {expected_run_id}, got {}",
+                run.run_id
+            ));
+        }
+
+        let rows = {
+            let mut stmt = tx
+                .prepare_cached(&format!(
+                    "SELECT txid_hex, target_height
+                     FROM {PENDING_TXS_TABLE}
+                     WHERE run_id = ?1 AND status IN ('scheduled', 'broadcasted')
+                     ORDER BY part_index ASC, txid_hex ASC"
+                ))
+                .map_err(|e| format!("Prepare migration creation evidence backfill: {e}"))?;
+            let rows = stmt
+                .query_map(params![expected_run_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+                })
+                .map_err(|e| format!("Query migration creation evidence backfill: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Read migration creation evidence backfill: {e}"))?;
+            rows
+        };
+
+        for (txid_hex, target_height) in rows {
+            record_creation_evidence(&tx, network, &txid_hex, target_height)?;
+        }
+        tx.commit()
+            .map_err(|e| format!("Commit migration creation evidence backfill: {e}"))
+    })
 }
 
 /// Promotes pending migration rows to `confirmed` when the wallet already has

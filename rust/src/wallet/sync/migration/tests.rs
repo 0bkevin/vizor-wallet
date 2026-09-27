@@ -2400,6 +2400,67 @@ fn timing_projection_clamps_pre_rebase_origin_to_current_scanned_height() {
     );
 }
 
+#[test]
+fn legacy_outbox_creation_evidence_uses_target_not_rescheduled_height() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("wallet.db").to_string_lossy().into_owned();
+    let txids = create_outbox_test_run(&db_path, "legacy-evidence", &[10], &[None]);
+    let conn = open_wallet_raw_conn_with_timeout(&db_path, READ_DB_BUSY_TIMEOUT).unwrap();
+    conn.execute("DELETE FROM transactions", []).unwrap();
+    conn.execute(
+        &format!(
+            "UPDATE {PENDING_TXS_TABLE}
+             SET scheduled_height = 500
+             WHERE run_id = 'legacy-evidence'"
+        ),
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    backfill_unbroadcast_migration_creation_evidence(
+        &db_path,
+        "account-1",
+        WalletNetwork::Regtest,
+        "legacy-evidence",
+    )
+    .unwrap();
+
+    let mut display_bytes: [u8; 32] = hex::decode(&txids[0]).unwrap().try_into().unwrap();
+    display_bytes.reverse();
+    let conn = open_wallet_raw_conn_with_timeout(&db_path, READ_DB_BUSY_TIMEOUT).unwrap();
+    let evidence = conn
+        .query_row(
+            "SELECT target_height, min_observed_height
+             FROM transactions WHERE txid = ?1",
+            [display_bytes.as_slice()],
+            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?)),
+        )
+        .unwrap();
+    assert_eq!(evidence, (101, 100));
+    drop(conn);
+
+    // Repeating recovery is safe and cannot replace construction provenance
+    // with the later broadcast schedule.
+    backfill_unbroadcast_migration_creation_evidence(
+        &db_path,
+        "account-1",
+        WalletNetwork::Regtest,
+        "legacy-evidence",
+    )
+    .unwrap();
+    let conn = open_wallet_raw_conn_with_timeout(&db_path, READ_DB_BUSY_TIMEOUT).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT target_height FROM transactions WHERE txid = ?1",
+            [display_bytes.as_slice()],
+            |row| row.get::<_, u32>(0),
+        )
+        .unwrap(),
+        101
+    );
+}
+
 fn create_signed_children_rebase_fixture(
     db_path: &str,
     run_id: &str,
