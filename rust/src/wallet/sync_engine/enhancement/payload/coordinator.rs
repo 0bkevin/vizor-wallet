@@ -238,7 +238,8 @@ impl RoutedPayloadEnhancement {
     /// Services one routed snapshot in bounded passes: rediscovery, private
     /// queries, a reread, then routed public payloads. Passes repeat only while
     /// the durable snapshot changes. Private failures defer PIR for this sync
-    /// session and never dispatch public work; only a routed public request
+    /// session and never dispatch public work; a local database failure is
+    /// returned instead of deferred. Only a routed public request
     /// reaches lightwalletd. Cancellation stops before the next dispatch.
     pub(in crate::wallet::sync_engine) async fn run<W: RecoveryWallet, E: EnhancementEffects<W>>(
         &mut self,
@@ -265,6 +266,10 @@ impl RoutedPayloadEnhancement {
                     Err(EnhancePirRunError::ExitRequested) => {
                         return Err(EnhancePirRunError::ExitRequested)
                     }
+                    // A local database failure is not a service outage: the
+                    // sync must fail rather than report success with recovered
+                    // details left unpersisted.
+                    Err(error @ EnhancePirRunError::Failed(SyncError::Db(_))) => return Err(error),
                     Err(error) => self.defer_after(error),
                 }
             }

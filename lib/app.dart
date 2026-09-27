@@ -214,7 +214,7 @@ Future<Widget> buildBootstrappedZcashWalletApp({
   List<Override> overrides = const [],
 }) async {
   final bootstrap = await loadAppBootstrap();
-  await _applyEnhancePirPolicy(bootstrap);
+  await applyEnhancePirPolicy(bootstrap);
   return BootstrappedZcashWalletApp(
     initialBootstrap: bootstrap,
     overrides: overrides,
@@ -223,13 +223,30 @@ Future<Widget> buildBootstrappedZcashWalletApp({
 
 /// Applies the saved private Ironwood recovery setting to Rust and to native
 /// background work before any sync or background preparation can start.
-Future<void> _applyEnhancePirPolicy(AppBootstrapState bootstrap) async {
+///
+/// A blocked bootstrap applies nothing. Its state carries defaults, not the
+/// saved preference, so applying it could relax native background work from
+/// private to public while the app cannot run. Native keeps its last value, or
+/// private when it never received one, and Rust stays public with no sync
+/// running until a retried bootstrap succeeds.
+@visibleForTesting
+Future<void> applyEnhancePirPolicy(
+  AppBootstrapState bootstrap, {
+  void Function(bool enabled)? setRustEnabled,
+  Future<void> Function(bool enabled)? setNativePrivateRecovery,
+}) async {
+  if (bootstrap.hasBlockingFailure) {
+    log('bootstrap: blocked; leaving private recovery policy unchanged');
+    return;
+  }
   final enabled =
       bootstrap.enhancePirEnabled &&
       isEnhancePirAvailableForNetwork(bootstrap.network);
-  rust_sync.setEnhancePirEnabled(enabled: enabled);
+  (setRustEnabled ??
+      (enabled) => rust_sync.setEnhancePirEnabled(enabled: enabled))(enabled);
   try {
-    await IronwoodMigrationBackgroundLifecycle.instance.setPrivateRecovery(
+    await (setNativePrivateRecovery ??
+        IronwoodMigrationBackgroundLifecycle.instance.setPrivateRecovery)(
       enabled,
     );
   } catch (error) {
@@ -276,7 +293,7 @@ class _BootstrappedZcashWalletAppState
 
   Future<void> _reloadBootstrap() async {
     final bootstrap = await loadAppBootstrap();
-    await _applyEnhancePirPolicy(bootstrap);
+    await applyEnhancePirPolicy(bootstrap);
     if (!mounted) return;
     setState(() {
       _bootstrap = bootstrap;

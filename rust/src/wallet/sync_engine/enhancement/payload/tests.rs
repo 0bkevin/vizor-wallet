@@ -301,6 +301,8 @@ struct Effects {
     lwd_after_rediscovery: Option<TxId>,
     /// Payload retrieval succeeds and retires the public work.
     complete_public: bool,
+    /// Writing the rebuilt enhancement hits a local SQLite failure.
+    fail_rediscovery_db: bool,
 }
 impl EnhancementEffects<Wallet> for Effects {
     async fn rediscover(
@@ -310,6 +312,9 @@ impl EnhancementEffects<Wallet> for Effects {
         _: &impl Fn() -> bool,
     ) -> Result<(), EnhancePirRunError> {
         self.rediscovered.push(request);
+        if self.fail_rediscovery_db {
+            return Err(SyncError::Db("disk full".into()).into());
+        }
         db.other
             .retain(|work| *work != EnhancePirWork::Rediscover(request));
         db.public.extend(self.lwd_after_rediscovery);
@@ -381,6 +386,70 @@ async fn pir_failure_never_falls_back_to_public_transport() {
         "only already-routed work reaches LWD, once per unchanged snapshot"
     );
     assert_eq!(service.posts.borrow().len(), 1);
+}
+
+#[tokio::test]
+async fn local_database_failure_fails_the_run_instead_of_deferring() {
+    let service = Service::new([]);
+    let mut wallet = Wallet::new(&[]);
+    wallet.other = vec![EnhancePirWork::Rediscover(rediscovery())];
+    wallet.public = vec![ORDINARY];
+    let mut effects = Effects {
+        fail_rediscovery_db: true,
+        ..Default::default()
+    };
+    let mut sync = sync();
+    let result = sync
+        .run(&mut wallet, &service, &mut effects, &|| false)
+        .await;
+    assert!(
+        matches!(result, Err(EnhancePirRunError::Failed(SyncError::Db(_)))),
+        "a local write failure must surface, got {result:?}"
+    );
+    assert!(
+        !sync.private_failed_for_sync,
+        "a local failure is not a service outage"
+    );
+    assert_eq!(wallet.other.len(), 1, "the unpersisted work stays queued");
+    assert!(
+        effects.public.is_empty(),
+        "the failed pass stops before any lightwalletd dispatch"
+    );
+    assert_eq!(service.init_count.get(), 0);
+}
+
+#[tokio::test]
+async fn private_service_failure_still_defers() {
+    let service = Service::new([]);
+    let mut wallet = Wallet::new(&[]);
+    wallet.other = vec![EnhancePirWork::Rediscover(rediscovery())];
+    let mut sync = sync();
+    // A rediscovery that cannot fetch its block is a transport failure.
+    struct NetFail;
+    impl EnhancementEffects<Wallet> for NetFail {
+        async fn rediscover(
+            &mut self,
+            _: &mut Wallet,
+            _: IronwoodEnhanceDiscoveryRequest,
+            _: &impl Fn() -> bool,
+        ) -> Result<(), EnhancePirRunError> {
+            Err(SyncError::Network("unreachable".into()).into())
+        }
+        async fn public(
+            &mut self,
+            _: &mut Wallet,
+            _: &[PublicTransactionEnhancementRequest],
+            _: &impl Fn() -> bool,
+        ) {
+        }
+    }
+    sync.run(&mut wallet, &service, &mut NetFail, &|| false)
+        .await
+        .unwrap();
+    assert!(
+        sync.private_failed_for_sync,
+        "a transport failure defers PIR"
+    );
 }
 
 #[tokio::test]

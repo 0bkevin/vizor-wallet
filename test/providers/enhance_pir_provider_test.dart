@@ -134,6 +134,20 @@ class _RestartSync extends SyncNotifier {
   void startSync({int? latestTipHeight}) => starts++;
 }
 
+/// Runs the production `startSync` guards and counts every entry. Tests set
+/// `api.running` so a start that passes the guards stops at "already running"
+/// instead of reaching Rust.
+class _GuardedSync extends SyncNotifier {
+  int attempts = 0;
+  @override
+  Future<SyncState> build() async => SyncState();
+  @override
+  void startSync({int? latestTipHeight}) {
+    attempts++;
+    super.startSync(latestTipHeight: latestTipHeight);
+  }
+}
+
 class _StatusSync extends SyncNotifier {
   _StatusSync()
     : super(walletDbPathResolver: () async => '/tmp/status-wallet.db');
@@ -470,6 +484,60 @@ void main() {
     });
   });
 
+  group('sync starts during a wallet mutation', () {
+    late ProviderContainer container;
+    late _GuardedSync sync;
+
+    setUp(() async {
+      sync = _GuardedSync();
+      container = setup(_Store(), sync, hasAccount: true);
+      addTearDown(container.dispose);
+      await container.read(syncProvider.future);
+    });
+
+    test(
+      'an app-resume start is deferred until the last pause exits',
+      () async {
+        // Account deletion holds the only pause; nothing was running to resume.
+        final deletion = await sync.pauseForWalletMutation();
+        api.running = true;
+
+        sync.startSync(); // e.g. onResume or an account-count callback
+        expect(sync.attempts, 1);
+
+        sync.resumeAfterWalletMutation(deletion);
+        expect(
+          sync.attempts,
+          2,
+          reason: 'the start refused during the pause is replayed on exit',
+        );
+      },
+    );
+
+    test('a toggle overlapping a deletion never starts sync early', () async {
+      final deletion = await sync.pauseForWalletMutation();
+      final toggle = await sync.pauseForWalletMutation();
+      api.running = true;
+
+      sync.resumeAfterWalletMutation(toggle, forceRestart: true);
+      sync.startSync();
+      expect(sync.attempts, 1, reason: 'only the refused direct start');
+
+      sync.resumeAfterWalletMutation(deletion);
+      expect(sync.attempts, 2);
+    });
+
+    test('a reset that opts out discards a refused start', () async {
+      final reset = await sync.pauseForWalletMutation();
+      api.running = true;
+      sync.startSync();
+
+      sync.endWalletMutationPause();
+      expect(sync.attempts, 1, reason: 'no wallet is left to sync');
+      expect(reset.hadWorkToPause, isFalse);
+    });
+  });
+
   group('RecoveryRestartGate', () {
     late DateTime clock;
     RecoveryRestartGate gate() => RecoveryRestartGate(now: () => clock);
@@ -535,6 +603,51 @@ void main() {
       expect(g.shouldRestart(5), isTrue);
       clock = clock.add(kRecoveryRestartInitialBackoff);
       expect(g.shouldRestart(5), isTrue);
+    });
+
+    test(
+      'a count change inside a long backoff returns to the base interval',
+      () {
+        final g = gate();
+        // Stall until the backoff is capped at ten minutes.
+        for (var i = 0; i < 20; i++) {
+          clock = clock.add(kRecoveryRestartMaxBackoff);
+          expect(g.shouldRestart(3), isTrue);
+        }
+        // A tip-driven sync completes one obligation shortly after.
+        clock = clock.add(const Duration(seconds: 5));
+        expect(g.shouldRestart(2), isFalse, reason: 'that sync ran recovery');
+        clock = clock.add(
+          kRecoveryRestartInitialBackoff - const Duration(seconds: 1),
+        );
+        expect(g.shouldRestart(2), isFalse);
+        clock = clock.add(const Duration(seconds: 1));
+        expect(
+          g.shouldRestart(2),
+          isTrue,
+          reason: 'not the ten minutes left on the stale deadline',
+        );
+      },
+    );
+
+    test('an unchanged count inside the window keeps the backoff', () {
+      final g = gate();
+      expect(g.shouldRestart(3), isTrue);
+      clock = clock.add(kRecoveryRestartInitialBackoff);
+      expect(g.shouldRestart(3), isTrue); // stalled: now waiting 60s
+      clock = clock.add(const Duration(seconds: 45));
+      expect(g.shouldRestart(3), isFalse);
+      clock = clock.add(const Duration(seconds: 15));
+      expect(g.shouldRestart(3), isTrue);
+    });
+
+    test('a rebase never pushes an earlier deadline later', () {
+      final g = gate();
+      expect(g.shouldRestart(3), isTrue); // deadline in 30s
+      clock = clock.add(const Duration(seconds: 20));
+      expect(g.shouldRestart(4), isFalse);
+      clock = clock.add(const Duration(seconds: 10));
+      expect(g.shouldRestart(4), isTrue, reason: 'the original 30s deadline');
     });
 
     test('draining the queue clears the backoff for the next obligation', () {

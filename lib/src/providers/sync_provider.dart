@@ -689,9 +689,20 @@ class RecoveryRestartGate {
       return false;
     }
     final at = _now();
-    final deadline = _retryAt;
-    if (deadline != null && at.isBefore(deadline)) return false;
     final previous = _lastUnits;
+    final deadline = _retryAt;
+    if (deadline != null && at.isBefore(deadline)) {
+      // A tip-driven sync moved the count inside the window. That sync already
+      // ran recovery, so don't restart now, but drop the stale backoff: the
+      // next restart comes no later than one base interval from here.
+      if (outstanding != previous) {
+        _lastUnits = outstanding;
+        _backoff = kRecoveryRestartInitialBackoff;
+        final rebased = at.add(kRecoveryRestartInitialBackoff);
+        if (rebased.isBefore(deadline)) _retryAt = rebased;
+      }
+      return false;
+    }
     final stalled = previous != null && outstanding == previous;
     _backoff = stalled
         ? _doubledBackoff(_backoff)
@@ -1149,6 +1160,13 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
   /// Stream events update state via _onSyncProgress. Completion handled by _onSyncDone.
   void startSync({int? latestTipHeight}) {
     if (_isShuttingDown) return;
+    // A wallet mutation owns the DB: account deletion, a reset, or the
+    // recovery toggle. Hand the start to whichever pause exits last; a reset
+    // that opts out discards it.
+    if (_walletMutationPauseCount > 0) {
+      _pendingMutationRestartSync = true;
+      return;
+    }
     if (_recoverySettingTransition) return;
     if (_requiresUnlock) {
       log('Sync: locked, skipping foreground sync start');
@@ -1812,7 +1830,6 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
           pause = await pauseForWalletMutation();
           await action();
         } finally {
-          _recoverySettingTransition = false;
           try {
             await lifecycle.resumeAfterMutation().timeout(
               _recoveryTransitionTimeout,
@@ -1828,6 +1845,11 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
           // throws has already released its own. Decrementing the shared
           // counter here would consume an overlapping account deletion's
           // pause and start sync while it is still deleting.
+          //
+          // The transition guard is dropped only now, after native resume has
+          // settled or timed out, so nothing can start sync in between. The
+          // pause check in `startSync` still covers an overlapping deletion.
+          _recoverySettingTransition = false;
           final acquired = pause;
           if (acquired != null) {
             resumeAfterWalletMutation(
@@ -2063,7 +2085,7 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
 
   Future<void> _checkAndSync() async {
     if (_isShuttingDown) return;
-    if (_recoverySettingTransition) return;
+    if (_recoverySettingTransition || _walletMutationPauseCount > 0) return;
     final gen = _syncGen;
     final epoch = _sensitiveStateEpoch;
     final hasAccounts = ref.read(accountProvider).value?.hasAccounts ?? false;
