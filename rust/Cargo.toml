@@ -7,8 +7,8 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-zakura-pir-status = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "33d48d8b8231559735f73eacd5b60bfbff732ba9" }
-zakura-transaction-status = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "33d48d8b8231559735f73eacd5b60bfbff732ba9" }
+zakura-pir-status = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
+zakura-transaction-status = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
 zcash_note_encryption = "0.4"
 flutter_rust_bridge = "=2.11.1"
 
@@ -108,7 +108,7 @@ version = "0.10.0"
 
 [dependencies.zcash_client_backend]
 package = "zakura-client-backend"
-version = "=0.1.0-rc6"
+version = "=0.1.0-rc7"
 features = [
     "orchard",
     "transparent-inputs",
@@ -121,7 +121,7 @@ features = [
 
 [dependencies.zcash_client_sqlite]
 package = "zakura-client-sqlite"
-version = "=0.1.0-rc6"
+version = "=0.1.0-rc7"
 features = ["orchard", "transparent-inputs", "unstable", "serde"]
 
 [dependencies.zcash_voting]
@@ -157,7 +157,7 @@ default-features = false
 features = ["std"]
 
 [dependencies.zakura-pir-enhance]
-version = "=0.0.1-rc0"
+version = "=0.0.1-rc1"
 default-features = false
 features = ["wallet"]
 
@@ -189,7 +189,7 @@ version = "=5.1.1-rc.1"
 features = ["test-fixtures"]
 
 [dev-dependencies.ipir-sp]
-version = "=0.1.0-rc.3"
+version = "=0.1.0-rc.6"
 
 [dev-dependencies.vote-commitment-tree]
 version = "=0.6.2"
@@ -226,8 +226,8 @@ opt-level = 3
 # Pin the routed status and enhancement work APIs from wallet-libraries.
 # Keep the related SDK crates on one revision to preserve shared Rust types.
 [patch.crates-io]
-zakura-client-backend = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "33d48d8b8231559735f73eacd5b60bfbff732ba9" }
-zakura-client-sqlite = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "33d48d8b8231559735f73eacd5b60bfbff732ba9" }
-zakura-pczt = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "33d48d8b8231559735f73eacd5b60bfbff732ba9" }
-zakura-pir-enhance = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "33d48d8b8231559735f73eacd5b60bfbff732ba9" }
-zakura-pir-enhance-types = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "33d48d8b8231559735f73eacd5b60bfbff732ba9" }
+zakura-client-backend = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
+zakura-client-sqlite = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
+zakura-pczt = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
+zakura-pir-enhance = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
+zakura-pir-enhance-types = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
