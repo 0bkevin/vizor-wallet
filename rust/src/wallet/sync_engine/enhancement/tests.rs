@@ -725,13 +725,13 @@ mod tests {
         .unwrap();
 
         db.set_status_mode(TransactionStatusMode::Private);
-        let status = super::super::recovery_status_for(&db, String::new()).unwrap();
+        let status = super::super::super::recovery_status_for(&db, String::new()).unwrap();
         assert_eq!(status.status, 1, "the private obligation is recovery work");
 
         // A public status failure fails the sync instead of being deferred, so
         // public status work never needs a recovery-only restart.
         db.set_status_mode(TransactionStatusMode::Public);
-        let status = super::super::recovery_status_for(&db, String::new()).unwrap();
+        let status = super::super::super::recovery_status_for(&db, String::new()).unwrap();
         assert_eq!(status.status, 0);
     }
 
@@ -757,12 +757,21 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|work| work.txid() == txid));
+            use zcash_client_backend::data_api::enhance_pir::{
+                EnhancePirWork, TransactionEnhancementWork,
+            };
             assert!(!db
                 .transaction_enhancement_work()
                 .unwrap()
                 .iter()
-                .any(|work| work.txid() == txid));
-            let status = super::super::recovery_status_for(&db, String::new()).unwrap();
+                .any(|work| match work {
+                    TransactionEnhancementWork::Public(request) => request.txid() == txid,
+                    TransactionEnhancementWork::Private(EnhancePirWork::Query(request)) => {
+                        request.request_id().txid() == txid
+                    }
+                    TransactionEnhancementWork::Private(_) => false,
+                }));
+            let status = super::super::super::recovery_status_for(&db, String::new()).unwrap();
             assert_eq!(
                 (status.status, status.queries, status.rediscovery),
                 (0, 0, 0)
