@@ -253,7 +253,7 @@ void main() {
     },
   );
 
-  group('private Ironwood recovery preference', () {
+  group('private queries preference', () {
     AppSecureStore storeWith(Map<String, String> values) {
       FlutterSecureStorage.setMockInitialValues(values);
       return AppSecureStore.testing(storage: const FlutterSecureStorage());
@@ -307,15 +307,43 @@ void main() {
       );
     });
 
-    test('degrades to off when the preference store fails', () async {
-      final storage = storeWith({kLegacyEnhancePirEnabledKey: 'true'});
+    for (final legacy in [null, 'false', 'true']) {
+      test(
+        'an unreadable preference is private for this launch (legacy=$legacy)',
+        () async {
+          final storage = storeWith({kLegacyEnhancePirEnabledKey: ?legacy});
+          final preferences = _FailingEnhancePirStore();
+
+          expect(
+            await readEnhancePirEnabledPreference(
+              storage,
+              preferences: preferences,
+            ),
+            isTrue,
+            reason: 'unknown must never relax native private mode',
+          );
+          expect(preferences.writes, 0, reason: 'the saved choice is kept');
+          expect(await storage.readPlain(kLegacyEnhancePirEnabledKey), legacy);
+        },
+      );
+    }
+
+    test('an unreadable legacy flag is private and not migrated', () async {
+      final storage = _UnreadableSecureStore();
+      final preferences = _FakeEnhancePirStore();
 
       expect(
         await readEnhancePirEnabledPreference(
           storage,
-          preferences: _FailingEnhancePirStore(),
+          preferences: preferences,
         ),
-        isFalse,
+        isTrue,
+      );
+      expect(preferences.writes, 0, reason: 'nothing was known to migrate');
+      expect(
+        storage.deletes,
+        isEmpty,
+        reason: 'the legacy key stays for retry',
       );
     });
 
@@ -357,9 +385,26 @@ class _FakeEnhancePirStore implements EnhancePirPreferenceStore {
 }
 
 class _FailingEnhancePirStore implements EnhancePirPreferenceStore {
+  var writes = 0;
+
   @override
   Future<bool?> readEnabled() async => throw StateError('read failed');
 
   @override
-  Future<void> writeEnabled(bool enabled) async {}
+  Future<void> writeEnabled(bool enabled) async => writes++;
+}
+
+/// A secure store whose plaintext reads fail, e.g. a locked keychain.
+class _UnreadableSecureStore extends AppSecureStore {
+  _UnreadableSecureStore()
+    : super.testing(storage: const FlutterSecureStorage());
+
+  final deletes = <String>[];
+
+  @override
+  Future<String?> readPlain(String key) async =>
+      throw StateError('keychain locked');
+
+  @override
+  Future<void> delete(String key) async => deletes.add(key);
 }

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zcash_wallet/app.dart';
 import 'package:zcash_wallet/src/app_bootstrap.dart';
 import 'package:zcash_wallet/src/core/config/rpc_endpoint_config.dart';
+import 'package:zcash_wallet/src/core/storage/app_secure_store.dart';
+import 'package:zcash_wallet/src/core/storage/enhance_pir_preference_store.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
 import 'package:zcash_wallet/src/providers/enhance_pir_provider.dart';
 
@@ -59,8 +62,38 @@ void main() {
     },
   );
 
+  test('an unreadable preference keeps both sides private', () async {
+    // What bootstrap builds when the saved preference cannot be read.
+    final unreadable = await readEnhancePirEnabledPreference(
+      _UnusedSecureStore(),
+      preferences: _UnreadablePreferences(),
+    );
+    await apply(_ready(enabled: unreadable));
+    final expected = isEnhancePirAvailableForNetwork('main');
+    expect(applied, ['rust:$expected', 'native:$expected']);
+    expect(applied, isNot(contains('native:false')));
+  });
+
   test('a ready bootstrap applies a disabled preference', () async {
     await apply(_ready(enabled: false));
     expect(applied, ['rust:false', 'native:false']);
   });
+}
+
+class _UnreadablePreferences implements EnhancePirPreferenceStore {
+  @override
+  Future<bool?> readEnabled() async => throw StateError('read failed');
+
+  @override
+  Future<void> writeEnabled(bool enabled) async =>
+      fail('an unknown preference must not be written');
+}
+
+/// Never reached: the failed preference read returns before the legacy lane.
+class _UnusedSecureStore extends AppSecureStore {
+  _UnusedSecureStore() : super.testing(storage: const FlutterSecureStorage());
+
+  @override
+  Future<String?> readPlain(String key) async =>
+      fail('legacy flag read after a failed preference read');
 }

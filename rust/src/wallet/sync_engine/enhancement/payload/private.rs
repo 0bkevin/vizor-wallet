@@ -413,14 +413,18 @@ impl RoutedPayloadEnhancement {
     }
 }
 /// A bad candidate cannot invalidate a separately revalidated current session.
-/// Cancellation always wins, even when old coverage remains usable.
+/// Cancellation always wins, even when old coverage remains usable. A local
+/// database failure is never a bad candidate: it is returned so the sync fails
+/// instead of continuing on stale coverage.
 fn retain_coverage_on_refresh_failure(
     refresh: Result<(), EnhancePirRunError>,
     has_coverage: bool,
 ) -> Result<bool, EnhancePirRunError> {
     match refresh {
         Ok(()) => Ok(true),
-        Err(EnhancePirRunError::Failed(error)) if has_coverage => {
+        Err(EnhancePirRunError::Failed(error))
+            if has_coverage && !matches!(error, SyncError::Db(_)) =>
+        {
             log::warn!("sync: snapshot refresh failed; retaining accepted coverage: {error}");
             Ok(false)
         }
@@ -493,6 +497,22 @@ mod tests {
                 Err(EnhancePirRunError::ExitRequested)
             ));
             assert!(retain_coverage_on_refresh_failure(Ok(()), covered).unwrap());
+        }
+    }
+
+    #[test]
+    fn refresh_db_failure_is_never_masked_by_coverage() {
+        for covered in [false, true] {
+            let result = retain_coverage_on_refresh_failure(
+                Err(EnhancePirRunError::Failed(SyncError::Db(
+                    "disk full".into(),
+                ))),
+                covered,
+            );
+            assert!(
+                matches!(result, Err(EnhancePirRunError::Failed(SyncError::Db(_)))),
+                "covered={covered}: a local write failure must surface, got {result:?}"
+            );
         }
     }
 

@@ -599,15 +599,18 @@ Future<bool> _readPlainBool(
   }
 }
 
-/// Reads the install-scoped private Ironwood recovery preference.
+/// Reads the install-scoped private queries preference.
 ///
 /// The preference used to live in the secure-store plaintext lane, which a
 /// wallet reset wipes wholesale. On the first launch after that move the saved
 /// value is carried over into shared preferences and the legacy key is dropped,
 /// so an upgrading install keeps the choice it already made.
 ///
-/// Best-effort by contract: a preference read must never block bootstrap, so
-/// every failure degrades to the off default.
+/// A preference read must never block bootstrap, but an unreadable value is
+/// unknown, not off. It resolves to private for this launch only: nothing is
+/// written back, so the next launch that can read the saved choice uses it.
+/// Resolving to off would release native background work from its private
+/// default and send public lookups for a user who opted in.
 @visibleForTesting
 Future<bool> readEnhancePirEnabledPreference(
   AppSecureStore storage, {
@@ -618,16 +621,23 @@ Future<bool> readEnhancePirEnabledPreference(
     final saved = await preferences.readEnabled();
     if (saved != null) return saved;
   } catch (e) {
-    log('bootstrap: failed to read private Ironwood recovery preference: $e');
-    return false;
+    log(
+      'bootstrap: failed to read private queries preference; '
+      'using private for this launch: $e',
+    );
+    return true;
   }
   var legacyEnabled = false;
   try {
     legacyEnabled =
         (await storage.readPlain(kLegacyEnhancePirEnabledKey)) == 'true';
   } catch (e) {
-    log('bootstrap: failed to read legacy private Ironwood recovery flag: $e');
-    return false;
+    // Leave the legacy key in place so a later launch can still migrate it.
+    log(
+      'bootstrap: failed to read legacy private queries flag; '
+      'using private for this launch: $e',
+    );
+    return true;
   }
   try {
     await preferences.writeEnabled(legacyEnabled);
@@ -635,7 +645,7 @@ Future<bool> readEnhancePirEnabledPreference(
   } catch (e) {
     // The value is still correct for this launch; the migration retries on the
     // next one, and any explicit toggle finishes it.
-    log('bootstrap: failed to migrate private Ironwood recovery flag: $e');
+    log('bootstrap: failed to migrate private queries flag: $e');
   }
   return legacyEnabled;
 }
