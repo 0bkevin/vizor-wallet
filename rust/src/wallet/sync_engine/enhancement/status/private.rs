@@ -1,6 +1,6 @@
 //! Private status observation. A selected private lookup never issues a txid RPC.
 use super::super::{
-    super::WalletDatabase, transport::StatusPirTransport, DEFAULT_MAINNET_ENDPOINT,
+    super::WalletDatabase, observability, transport::StatusPirTransport, DEFAULT_MAINNET_ENDPOINT,
 };
 use crate::wallet::network::WalletNetwork;
 use crate::wallet::transaction_data::{LookupError, TransactionObservation};
@@ -20,7 +20,7 @@ const MAINNET_GENESIS_DISPLAY: &str =
     "00040fe8ec8471911baa1db1266ea15dd06b4a8a5c453883c000b031973dce08";
 const ENDPOINT_ENV: &str = "VIZOR_STATUS_PIR_URL";
 
-fn status_endpoint() -> String {
+pub(in crate::wallet::sync_engine::enhancement) fn status_endpoint() -> String {
     std::env::var(ENDPOINT_ENV).unwrap_or_else(|_| DEFAULT_MAINNET_ENDPOINT.into())
 }
 
@@ -174,6 +174,7 @@ fn accepted_anchor(
     manifest: &zakura_pir_status::Manifest,
 ) -> Result<AcceptedAnchor, LookupError> {
     if manifest.network != mainnet_genesis() {
+        observability::enhance_log!(warn, "status_pir anchor rejected reason=network");
         return Err(LookupError::Malformed);
     }
     let anchor_height = BlockHeight::from_u32(manifest.anchor_height);
@@ -181,6 +182,11 @@ fn accepted_anchor(
         .block_fully_scanned()
         .map_err(|_| LookupError::Unavailable)?;
     if !scanned.is_some_and(|meta| meta.block_height() >= anchor_height) {
+        observability::enhance_log!(
+            info,
+            "status_pir anchor not yet usable reason=scan_below_anchor anchor_height={}",
+            manifest.anchor_height
+        );
         return Err(LookupError::Unavailable);
     }
     let local_hash = db
@@ -188,6 +194,11 @@ fn accepted_anchor(
         .map_err(|_| LookupError::Unavailable)?
         .ok_or(LookupError::Unavailable)?;
     if local_hash.0 != manifest.anchor_hash {
+        observability::enhance_log!(
+            warn,
+            "status_pir anchor rejected reason=hash_mismatch anchor_height={}",
+            manifest.anchor_height
+        );
         return Err(LookupError::Malformed);
     }
     Ok(AcceptedAnchor {
@@ -243,6 +254,11 @@ impl<F: Fn() -> bool + Sync> PrivateStatusSession<'_, F> {
                 && self.route.take_status_session_conflict();
             match result {
                 Err(Error::Unavailable) if conflict && !retried => {
+                    observability::record(|c| c.status_refreshes += 1);
+                    observability::enhance_log!(
+                        info,
+                        "status_pir session conflict; refreshing once"
+                    );
                     *client = self.refresh().await?;
                     retried = true;
                 }
@@ -274,7 +290,13 @@ async fn initialize<F: Fn() -> bool + Sync>(
     for attempt in 0..2 {
         let pending = PendingClient::fetch(route, endpoint, session_now_ms as fn() -> u64)
             .await
-            .map_err(classify)?;
+            .map_err(|error| {
+                observability::enhance_log!(
+                    warn,
+                    "status_pir manifest fetch failed error={error:?}"
+                );
+                classify(error)
+            })?;
         let anchor = {
             let db = crate::wallet::db::open_wallet_db_readonly_with_timeout(
                 db_path,
@@ -284,11 +306,31 @@ async fn initialize<F: Fn() -> bool + Sync>(
             .map_err(|_| LookupError::Unavailable)?;
             accepted_anchor(&db, pending.manifest())?
         };
+        let manifest = pending.manifest();
+        let (generation, recovery_epoch, coverage_start, anchor_height, entries) = (
+            manifest.generation,
+            manifest.recovery_epoch,
+            manifest.coverage_start,
+            manifest.anchor_height,
+            manifest.entries,
+        );
         let result = pending.accept(route, &anchor).await;
         let conflict =
             matches!(&result, Err(Error::Unavailable)) && route.take_status_session_conflict();
         if conflict && attempt == 0 {
+            observability::record(|c| c.status_refreshes += 1);
+            observability::enhance_log!(info, "status_pir init conflict; refetching manifest");
             continue;
+        }
+        match &result {
+            Ok(_) => observability::enhance_log!(
+                info,
+                "status_pir session open generation={generation} epoch={recovery_epoch} \
+                 coverage_start={coverage_start} anchor_height={anchor_height} entries={entries}"
+            ),
+            Err(error) => {
+                observability::enhance_log!(warn, "status_pir session open failed error={error:?}")
+            }
         }
         return result.map_err(classify);
     }

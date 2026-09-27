@@ -7,7 +7,10 @@ use std::{
     time::Duration,
 };
 
-use super::{routed_response, RoutedTransport};
+use super::{
+    super::observability::{self, Lane},
+    routed_response, RoutedTransport,
+};
 
 const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -70,6 +73,7 @@ impl<F: Fn() -> bool> StatusPirTransport<'_, F> {
         use zakura_pir_status::Error;
 
         self.session_error.store(0, Ordering::SeqCst);
+        let started = std::time::Instant::now();
         let request = async {
             let response = routed_response(
                 method,
@@ -104,14 +108,29 @@ impl<F: Fn() -> bool> StatusPirTransport<'_, F> {
             Ok(bytes)
         };
 
-        tokio::select! {
+        let result = tokio::select! {
             biased;
             _ = crate::wallet::sync_engine::watch_for_exit(self.route.should_exit) => {
                 Err(Error::Cancelled)
             },
             result = tokio::time::timeout(STATUS_REQUEST_TIMEOUT, request) => {
-                result.map_err(|_| Error::Timeout)?
+                result.map_err(|_| Error::Timeout).and_then(|result| result)
+            }
+        };
+        match &result {
+            Ok(bytes) => {
+                observability::record_http(Lane::Status, started, Some(bytes.len()), false)
+            }
+            Err(Error::Cancelled) => {}
+            Err(error) => {
+                observability::record_http(Lane::Status, started, None, true);
+                let status = self.session_error.load(Ordering::SeqCst);
+                observability::enhance_log!(
+                    warn,
+                    "status_pir http failed error={error:?} conflict_status={status}"
+                );
             }
         }
+        result
     }
 }

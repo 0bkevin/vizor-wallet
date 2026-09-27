@@ -18,7 +18,10 @@ use crate::wallet::{
     sync_engine::{lwd, SyncError, WalletDatabase},
 };
 
-use super::{super::payload::public::mined_height_from_raw_height, fees::fill_missing_fee};
+use super::{
+    super::{observability, payload::public::mined_height_from_raw_height},
+    fees::fill_missing_fee,
+};
 
 #[derive(Default)]
 pub(in crate::wallet::sync_engine::enhancement) struct HistoryPass {
@@ -41,6 +44,8 @@ impl HistoryPass {
         if !actionable {
             return Ok(false);
         }
+        let ranges: usize = planned.iter().map(|group| group.len()).sum();
+        observability::record(|c| c.history_ranges += ranges as u32);
 
         let download_client = client.clone();
         let open: super::super::super::address_history::OpenHistory = Box::new(move |req| {
@@ -85,8 +90,12 @@ impl HistoryPass {
             match result? {
                 Some(raw) => {
                     let tx = match store_address_transaction(&network, db, &raw.data, raw.height) {
-                        Ok(tx) => tx,
+                        Ok(tx) => {
+                            observability::record(|c| c.history_txs += 1);
+                            tx
+                        }
                         Err(error) => {
+                            observability::record(|c| c.history_failed += 1);
                             log::warn!(
                                 "sync: address transaction processing failed; leaving range unchecked for retry: {error}"
                             );
@@ -117,12 +126,14 @@ impl HistoryPass {
                             )
                         })
                     {
+                        observability::record(|c| c.history_failed += 1);
                         log::warn!(
                             "sync: address completion write failed; retrying on a later sync: {error}"
                         );
                         self.failed_addresses.insert(req.address());
                         continue;
                     }
+                    observability::record(|c| c.history_acked += 1);
                     read.finish_range();
                 }
             }

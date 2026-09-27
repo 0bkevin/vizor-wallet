@@ -29,6 +29,7 @@
 //! migration reconciliation) resolve the same policy through this module.
 
 mod auxiliary;
+mod observability;
 mod payload;
 mod policy;
 pub(crate) mod status;
@@ -68,6 +69,13 @@ impl EnhancementSession {
     pub(super) fn new(network: crate::wallet::network::WalletNetwork, db_path: &str) -> Self {
         let policy = EnhancementPolicy::current(network);
         payload::begin_session(db_path);
+        observability::begin_session(
+            db_path,
+            network,
+            policy.is_private(),
+            &status::status_endpoint(),
+            &payload::private::payload_endpoint(),
+        );
         Self {
             policy,
             payload: RoutedPayloadEnhancement::new(network, policy.is_private(), db_path),
@@ -87,6 +95,19 @@ impl EnhancementSession {
         should_exit: &(impl Fn() -> bool + Sync),
     ) -> Result<bool, SyncError> {
         self.policy.configure_db(db);
+        let pass = observability::Pass::begin("checkpoint");
+        let result = self.checkpoint(db, client, cached, should_exit).await;
+        pass.finish(&result, &payload::phase(&self.db_path));
+        result
+    }
+
+    async fn checkpoint(
+        &mut self,
+        db: &mut WalletDatabase,
+        client: &mut CompactTxStreamerClient<Channel>,
+        cached: Option<&MemoryBlockSource>,
+        should_exit: &(impl Fn() -> bool + Sync),
+    ) -> Result<bool, SyncError> {
         backfill_stored_fees(client, db, &self.db_path, should_exit).await?;
 
         // The public source reuses the caller-owned lightwalletd channel, while
@@ -135,8 +156,7 @@ impl EnhancementSession {
             }
         }
 
-        self.run_payload_recovery(db, client, cached, should_exit)
-            .await
+        self.payload_recovery(db, client, cached, should_exit).await
     }
 
     /// Retries already-routed payload work without running metadata lanes.
@@ -148,6 +168,19 @@ impl EnhancementSession {
         should_exit: &impl Fn() -> bool,
     ) -> Result<bool, SyncError> {
         self.policy.configure_db(db);
+        let pass = observability::Pass::begin("payload_recovery");
+        let result = self.payload_recovery(db, client, cached, should_exit).await;
+        pass.finish(&result, &payload::phase(&self.db_path));
+        result
+    }
+
+    async fn payload_recovery(
+        &mut self,
+        db: &mut WalletDatabase,
+        client: &mut CompactTxStreamerClient<Channel>,
+        cached: Option<&MemoryBlockSource>,
+        should_exit: &impl Fn() -> bool,
+    ) -> Result<bool, SyncError> {
         let mut effects =
             ProductionEnhancementEffects::new(self.network, &self.db_path, client, cached);
         let route = RoutedTransport::new(should_exit);

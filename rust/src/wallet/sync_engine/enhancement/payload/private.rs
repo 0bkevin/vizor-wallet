@@ -5,6 +5,7 @@
 //! sibling scheduler owns transport selection; this module never converts a
 //! private failure or suspension into public transaction-ID retrieval.
 use super::{
+    super::observability::{self, enhance_log},
     super::{
         super::SyncError,
         transport::{client_protocol_error, RoutedHttpError},
@@ -47,6 +48,23 @@ fn client_transport_error(error: EnhancePirRunError) -> ClientError {
 
 fn is_stale_routing_status(status: u16) -> bool {
     matches!(status, 409 | 410)
+}
+
+/// Public server metadata only; safe to log.
+fn manifest_summary(manifest: &Manifest) -> String {
+    format!(
+        "generation={} epoch={} records={} anchor_height={}",
+        manifest.generation,
+        manifest.recovery_epoch,
+        manifest.coverage.records,
+        manifest.anchor_height
+    )
+}
+
+pub(in crate::wallet::sync_engine::enhancement) fn payload_endpoint() -> String {
+    std::env::var(ENDPOINT_ENV)
+        .or_else(|_| std::env::var(LEGACY_ENDPOINT_ENV))
+        .unwrap_or_else(|_| DEFAULT_MAINNET_ENDPOINT.into())
 }
 
 /// A cover range of up to [`REDISCOVERY_COVER_BLOCKS`] blocks containing `height`.
@@ -117,11 +135,7 @@ impl RoutedPayloadEnhancement {
         Self {
             network,
             db_path: db_path.into(),
-            endpoint: (enabled && network == WalletNetwork::Main).then(|| {
-                std::env::var(ENDPOINT_ENV)
-                    .or_else(|_| std::env::var(LEGACY_ENDPOINT_ENV))
-                    .unwrap_or_else(|_| DEFAULT_MAINNET_ENDPOINT.into())
-            }),
+            endpoint: (enabled && network == WalletNetwork::Main).then(payload_endpoint),
             pending_routing: None,
             accepted_routing: None,
             private_failed_for_sync: false,
@@ -168,9 +182,12 @@ impl RoutedPayloadEnhancement {
             && (force || session_refresh_due || routing_refresh_due(&self.db_path))
         {
             mark_routing_refresh(&self.db_path);
-            self.pending_routing = Some(
-                PendingClient::fetch(route, self.endpoint.as_deref().expect("enabled")).await?,
-            );
+            let fetched =
+                PendingClient::fetch(route, self.endpoint.as_deref().expect("enabled")).await;
+            if let Err(error) = &fetched {
+                enhance_log!(warn, "enhance_pir manifest fetch failed error={error}");
+            }
+            self.pending_routing = Some(fetched?);
         }
         let Some(pending) = self.pending_routing.as_ref() else {
             return Ok(self.accepted_routing.is_some());
@@ -181,17 +198,25 @@ impl RoutedPayloadEnhancement {
                     return Err(EnhancePirRunError::ExitRequested);
                 }
                 let pending = self.pending_routing.take().expect("pending routing");
+                let candidate = manifest_summary(pending.generation());
                 if let Some(accepted_routing) = self.accepted_routing.as_mut() {
                     if !routing_is_current_or_newer(
                         accepted_routing.generation(),
                         pending.generation(),
                     ) {
+                        enhance_log!(
+                            warn,
+                            "enhance_pir manifest rejected as downgrade current=({}) candidate=({candidate})",
+                            manifest_summary(accepted_routing.generation())
+                        );
                         set_phase(&self.db_path, RecoveryPhase::RetryingLater);
                         return Ok(!force);
                     }
                     accepted_routing.accept_routing(pending, &acceptance)?;
+                    enhance_log!(info, "enhance_pir manifest updated {candidate}");
                 } else {
                     self.accepted_routing = Some(pending.accept(&acceptance)?);
+                    enhance_log!(info, "enhance_pir manifest accepted {candidate}");
                 }
                 Ok(true)
             }
@@ -200,6 +225,11 @@ impl RoutedPayloadEnhancement {
                 Ok(false)
             }
             Acceptance::Mismatch => {
+                enhance_log!(
+                    warn,
+                    "enhance_pir manifest anchor mismatch {}",
+                    manifest_summary(pending.generation())
+                );
                 self.pending_routing = None;
                 Err(SyncError::parse("snapshot anchor mismatch").into())
             }
@@ -224,12 +254,14 @@ impl RoutedPayloadEnhancement {
                 return Err(EnhancePirRunError::ExitRequested);
             }
             effects.rediscover(db, request, should_exit).await?;
+            observability::record(|c| c.private_rediscovered += 1);
         }
         self.run_queries(db, route, should_exit).await
     }
 
     /// An ordinary PIR failure defers retries until a new full-sync session.
     pub(super) fn defer_after(&mut self, error: EnhancePirRunError) {
+        observability::record(|c| c.private_deferred += 1);
         self.defer();
         match error {
             EnhancePirRunError::HttpStatus(status) => log::warn!(
@@ -263,6 +295,11 @@ impl RoutedPayloadEnhancement {
                     return Ok(());
                 }
                 Acceptance::Mismatch => {
+                    enhance_log!(
+                        warn,
+                        "enhance_pir accepted manifest no longer matches wallet chain {}",
+                        manifest_summary(accepted_routing.generation())
+                    );
                     self.accepted_routing = None;
                     self.pending_routing = None;
                     return Err(SyncError::parse("snapshot anchor mismatch").into());
@@ -302,6 +339,8 @@ impl RoutedPayloadEnhancement {
             }
             // Rejected before any network I/O when the batch exceeds the
             // client's input limit.
+            let query_count = work.query_count() as u32;
+            observability::record(|c| c.private_queries += query_count);
             let stale_status = {
                 let accepted_routing = self.accepted_routing.as_mut().expect("checked above");
                 match accepted_routing.query_batch(route, work.positions()) {
@@ -317,7 +356,10 @@ impl RoutedPayloadEnhancement {
                                 return Err(EnhancePirRunError::ExitRequested);
                             }
                             let record = match result.record {
-                                Err(ClientError::OutsideCoverage(_)) => continue,
+                                Err(ClientError::OutsideCoverage(_)) => {
+                                    observability::record(|c| c.private_outside += 1);
+                                    continue;
+                                }
                                 Err(ClientError::HttpStatus(status))
                                     if is_stale_routing_status(status) =>
                                 {
@@ -328,6 +370,9 @@ impl RoutedPayloadEnhancement {
                             };
                             for (request, record) in work.map_record(result.position, record) {
                                 let result = db.apply(request, &record)?;
+                                if result != EnhancePirStoreResult::Rejected {
+                                    observability::record(|c| c.private_applied += 1);
+                                }
                                 if result == EnhancePirStoreResult::Rejected {
                                     return Err(SyncError::parse(
                                         "PIR record failed wallet authentication",
@@ -346,6 +391,7 @@ impl RoutedPayloadEnhancement {
             if attempt == 1 {
                 return Err(ClientError::HttpStatus(status).into());
             }
+            observability::record(|c| c.private_stale_refreshes += 1);
             log::info!(
                 "sync: Enhance PIR routing became stale (HTTP {status}); refreshing and retrying unfinished work"
             );

@@ -8,7 +8,10 @@ use zakura_pir_enhance::{
 
 use crate::wallet::sync_engine::SyncError;
 
-use super::{routed_request, RoutedHttpError, RoutedTransport};
+use super::{
+    super::observability::{self, Lane},
+    routed_request, RoutedHttpError, RoutedTransport,
+};
 
 impl<F: Fn() -> bool> Transport for RoutedTransport<'_, F> {
     async fn execute(
@@ -16,6 +19,7 @@ impl<F: Fn() -> bool> Transport for RoutedTransport<'_, F> {
         request: transport::Request,
     ) -> Result<transport::ResponseBody, ClientError> {
         let response_body = request.response_body();
+        let started = std::time::Instant::now();
         let response = routed_request(
             match request.method {
                 transport::Method::Get => Method::GET,
@@ -28,6 +32,24 @@ impl<F: Fn() -> bool> Transport for RoutedTransport<'_, F> {
             &self.direct,
         )
         .await;
+        match &response {
+            Ok(body) => {
+                observability::record_http(Lane::Enhance, started, Some(body.as_ref().len()), false)
+            }
+            Err(RoutedHttpError::Cancelled) => {}
+            Err(RoutedHttpError::HttpStatus(status)) => {
+                observability::record_http(Lane::Enhance, started, None, true);
+                observability::enhance_log!(warn, "enhance_pir http status={status}");
+            }
+            Err(RoutedHttpError::Failed(error)) => {
+                observability::record_http(Lane::Enhance, started, None, true);
+                observability::enhance_log!(
+                    warn,
+                    "enhance_pir http failed kind={}",
+                    observability::error_kind(error)
+                );
+            }
+        }
         if (self.should_exit)() {
             return Err(ClientError::Cancelled);
         }
