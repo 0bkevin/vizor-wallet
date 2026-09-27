@@ -106,7 +106,25 @@ fn status_error(error: LookupError) -> StatusError {
         LookupError::Malformed => StatusError::Malformed,
         LookupError::Cancelled => StatusError::Cancelled,
         LookupError::Transport { code } => StatusError::Transport { code },
+        LookupError::LocalStorage => StatusError::LocalStorage,
     }
+}
+
+/// A wallet DB read failure is local, not a Status PIR outage: the caller must
+/// fail the sync instead of deferring private status for the session. The
+/// variant carries no detail, so it is logged here.
+fn local_storage(context: &str, error: impl std::fmt::Display) -> LookupError {
+    log::error!("status_pir local wallet read failed context={context}: {error}");
+    LookupError::LocalStorage
+}
+
+fn open_anchor_db(db_path: &str, network: WalletNetwork) -> Result<WalletDatabase, LookupError> {
+    crate::wallet::db::open_wallet_db_readonly_with_timeout(
+        db_path,
+        network,
+        crate::wallet::db::READ_DB_BUSY_TIMEOUT,
+    )
+    .map_err(|error| local_storage("open", error))
 }
 
 impl<'a, F: Fn() -> bool + Sync> StatusSource for PrivateStatusSource<'a, F> {
@@ -180,7 +198,7 @@ fn accepted_anchor(
     let anchor_height = BlockHeight::from_u32(manifest.anchor_height);
     let scanned = db
         .block_fully_scanned()
-        .map_err(|_| LookupError::Unavailable)?;
+        .map_err(|error| local_storage("block_fully_scanned", error))?;
     if !scanned.is_some_and(|meta| meta.block_height() >= anchor_height) {
         observability::enhance_log!(
             info,
@@ -191,7 +209,8 @@ fn accepted_anchor(
     }
     let local_hash = db
         .get_block_hash(anchor_height)
-        .map_err(|_| LookupError::Unavailable)?
+        .map_err(|error| local_storage("get_block_hash", error))?
+        // Scanned but hashless is not a read failure: wait for scanning.
         .ok_or(LookupError::Unavailable)?;
     if local_hash.0 != manifest.anchor_hash {
         observability::enhance_log!(
@@ -227,12 +246,7 @@ impl<F: Fn() -> bool + Sync> PrivateStatusSession<'_, F> {
     }
 
     fn check_anchor(&self, client: &SessionClient) -> Result<(), LookupError> {
-        let db = crate::wallet::db::open_wallet_db_readonly_with_timeout(
-            self.db_path,
-            self.network,
-            crate::wallet::db::READ_DB_BUSY_TIMEOUT,
-        )
-        .map_err(|_| LookupError::Unavailable)?;
+        let db = open_anchor_db(self.db_path, self.network)?;
         accepted_anchor(&db, client.manifest())?;
         Ok(())
     }
@@ -298,12 +312,7 @@ async fn initialize<F: Fn() -> bool + Sync>(
                 classify(error)
             })?;
         let anchor = {
-            let db = crate::wallet::db::open_wallet_db_readonly_with_timeout(
-                db_path,
-                network,
-                crate::wallet::db::READ_DB_BUSY_TIMEOUT,
-            )
-            .map_err(|_| LookupError::Unavailable)?;
+            let db = open_anchor_db(db_path, network)?;
             accepted_anchor(&db, pending.manifest())?
         };
         let manifest = pending.manifest();
@@ -383,6 +392,21 @@ mod tests {
         );
         assert_eq!(classify(Error::Stale), LookupError::Stale);
         assert_eq!(classify(Error::Unavailable), LookupError::Unavailable);
+    }
+
+    #[test]
+    fn unreadable_wallet_db_is_local_storage_not_an_outage() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing").join("wallet.db");
+        let result = open_anchor_db(missing.to_str().unwrap(), WalletNetwork::Main);
+        assert!(
+            matches!(result, Err(LookupError::LocalStorage)),
+            "a local open failure must not read as Unavailable"
+        );
+        assert_eq!(
+            status_error(LookupError::LocalStorage),
+            StatusError::LocalStorage
+        );
     }
 
     fn coverage(required_through: Option<u32>) -> LocalCoverageContext {

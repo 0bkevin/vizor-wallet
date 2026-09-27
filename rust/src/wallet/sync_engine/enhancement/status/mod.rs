@@ -3,7 +3,8 @@
 //! A reader selects exactly one source for its lifetime. When private Status
 //! PIR is selected, initialization or observation failure is inconclusive and
 //! must not fall back to a public transaction-ID request. It also never fails
-//! the sync, except for the explicit coverage feedback gate: other work stays
+//! the sync, except for the explicit coverage feedback gate and a local wallet
+//! database failure (`StatusError::LocalStorage`): other work stays
 //! durable and private status is skipped for the rest of the session, so a
 //! lagging or unreachable service cannot stall scanning.
 
@@ -159,6 +160,14 @@ where
                 return Err(SyncError::PrivateStatusCoverageIncomplete);
             }
             Err(StatusError::Cancelled) => return Ok(actionable),
+            // The wallet's own database could not be read. That is not a
+            // service outage, so it fails the sync rather than being deferred.
+            Err(StatusError::LocalStorage) => {
+                observability::record(|c| c.status_failed += 1);
+                return Err(SyncError::db(
+                    "transaction status: local wallet database read failed",
+                ));
+            }
             Err(error) if is_private(&work) => {
                 // Inconclusive: keep the work and stop querying the private
                 // service for this session. Never a public fallback.

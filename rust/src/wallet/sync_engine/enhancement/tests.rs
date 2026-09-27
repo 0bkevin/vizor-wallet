@@ -784,6 +784,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_storage_status_errors_fail_sync_without_deferring() {
+        use zakura_transaction_status::{StatusError, StatusObservation};
+        let (_file, mut db, txid) = private_status_work_db();
+        let work = vec![db.transaction_status_work_for(txid).unwrap()];
+        let public = status_source(Ok(StatusObservation::NotFound));
+        let public_opens = public.opens.clone();
+        let mut reader = super::super::status::RoutedStatusReader::new(
+            public,
+            status_source(Err(StatusError::LocalStorage)),
+        );
+        let mut private_failed = false;
+
+        let result = super::super::status::run_requests(
+            &mut reader,
+            &mut db,
+            &work,
+            &mut std::collections::HashSet::new(),
+            &mut private_failed,
+            &|| false,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(SyncError::Db(_))),
+            "a local read failure must fail the sync, got {result:?}"
+        );
+        assert!(!private_failed, "a local failure is not a service outage");
+        assert_eq!(public_opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            db.transaction_status_work_for(txid).unwrap(),
+            work[0],
+            "the status obligation stays pending"
+        );
+    }
+
+    #[tokio::test]
     async fn public_status_errors_still_fail_sync() {
         use zakura_transaction_status::{StatusError, StatusObservation};
         use zcash_client_backend::data_api::status::{
