@@ -1163,7 +1163,7 @@ class _EnhancePirPrivacyControl extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
           child: Text(
-            'Experimental. Enhances transaction data without revealing your transaction IDs to servers. Timing and query counts remain visible to the service.',
+            'Experimental. Queries and enhances transaction data without revealing their IDs to servers.',
             style: AppTypography.bodyMedium.copyWith(
               color: colors.text.secondary,
             ),
