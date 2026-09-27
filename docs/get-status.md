@@ -73,15 +73,32 @@ match locally scanned wallet state. The query is routed over the existing
 Tor/direct policy; iOS background work uses its direct route. The result maps
 to the same four internal observations. Uncovered txids, stale generations,
 malformed rows, transport failures, and cancellation leave status work
-inconclusive. The native iOS ABI adds a private entrypoint while retaining the
-public one.
+inconclusive. An inconclusive private lookup never fails the foreground sync:
+the obligation stays durable, and after the first failure other than coverage
+the session stops querying the private service until the next sync. A
+lightwalletd failure for public status work still fails the sync as before.
+The native iOS ABI adds a private entrypoint while retaining the public one.
 
-The current integration supplies no earliest-inclusion bound for ordinary or
-imported status requests. Positive records are usable; a missing
-record is `CoverageIncomplete`, never `NotFound`. Migration retirement also
-requires coverage through its decision height and therefore cannot retire on a
-private negative until durable local creation evidence is implemented. This is
-an intentional fail-closed limit of the current wiring.
+Each lookup carries the wallet's chain tip as its decision height. When the
+service's snapshot anchor is below that height, Vizor queries without the bound
+and accepts only positive records (mined, mempool, forked); a missing record is
+then `CoverageIncomplete`, because absence is proven only up to the anchor. A
+private `NotFound` is persisted only when the queried decision height still
+equals the chain tip with the same block hash.
+
+Ordinary and imported status requests carry no earliest-inclusion bound, so a
+missing record for them is always `CoverageIncomplete`, never `NotFound`.
+Migration runs record durable creation evidence when they are created. Migration
+retirement can therefore conclude on a private `NotFound` once the snapshot
+covers the run's decision height, together with the expiry check. The service
+records carry no inclusion proof, so this retirement trusts the service's
+absence claim. Runs created before creation evidence existed have no
+earliest-inclusion bound and stay pending in private mode.
+
+The iOS background preparation task does not track confirmations while private
+recovery is on. The background task cannot advance the wallet's scanned state,
+so it can never accept a Status PIR anchor. Confirmations are observed when
+Vizor is open instead.
 
 The Status PIR integration remains unqualified for production. Synthetic
 qualification is not proof of live ingestion or durable publication; the

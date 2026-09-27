@@ -582,6 +582,21 @@ class IronwoodMigrationBackgroundLifecycle {
 
   Future<void> resumeAfterFailedMutation() => resumeAfterMutation();
 
+  /// Tells iOS background preparation whether private Ironwood recovery is in
+  /// effect. While it is, confirmation tracking is left to the foreground app,
+  /// because a background pass can neither conclude a private status lookup nor
+  /// fall back to a public one. Native treats a value it never received as
+  /// private, so a missed call only makes tracking stricter.
+  Future<void> setPrivateRecovery(bool enabled) async {
+    if (!_isIOS) return;
+    final applied = await _channel.invokeMethod<bool>('setPrivateRecovery', {
+      'enabled': enabled,
+    });
+    if (applied != true) {
+      throw StateError('Failed to apply private recovery to background work.');
+    }
+  }
+
   static String _newQuiescenceLeaseId() {
     final bytes = Uint8List(16);
     final random = Random.secure();

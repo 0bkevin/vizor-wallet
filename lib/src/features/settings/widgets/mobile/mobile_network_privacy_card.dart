@@ -263,7 +263,12 @@ class MobileNetworkPrivacyCard extends ConsumerWidget {
           if (enhancePirAvailable) const SizedBox(height: AppSpacing.sm),
           if (enhancePirAvailable)
             Text(
-              'Experimental. Enhances transaction data without revealing your transaction IDs to servers. Timing and query counts remain visible to the service.',
+              // iOS background migration tracking cannot run privately, so it
+              // stays off while this is on; say where confirmations happen.
+              defaultTargetPlatform == TargetPlatform.iOS
+                  ? 'Experimental. Enhances transaction data without revealing your transaction IDs to servers. Timing and query counts remain visible to the service. While on, migration confirmations are checked only when Vizor is open.'
+                  : 'Experimental. Enhances transaction data without revealing your transaction IDs to servers. Timing and query counts remain visible to the service.',
+              key: const ValueKey('mobile_settings_enhance_pir_description'),
               style: AppTypography.bodyMedium.copyWith(
                 color: colors.text.secondary,
               ),

@@ -59,6 +59,9 @@ pub(super) struct EnhancementSession {
     payload: RoutedPayloadEnhancement,
     network: crate::wallet::network::WalletNetwork,
     db_path: String,
+    /// Set by the first failed private status lookup; later checkpoints in this
+    /// session leave private status work pending instead of retrying the service.
+    private_status_failed: bool,
 }
 
 impl EnhancementSession {
@@ -70,6 +73,7 @@ impl EnhancementSession {
             payload: RoutedPayloadEnhancement::new(network, policy.is_private(), db_path),
             network,
             db_path: db_path.into(),
+            private_status_failed: false,
         }
     }
 
@@ -106,6 +110,7 @@ impl EnhancementSession {
                 db,
                 &status_work,
                 &mut attempted_statuses,
+                &mut self.private_status_failed,
                 should_exit,
             )
             .await?;

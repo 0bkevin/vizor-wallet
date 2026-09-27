@@ -3,6 +3,30 @@ import Foundation
 import UIKit
 import UserNotifications
 
+/// App-wide private Ironwood recovery setting as last applied by Dart.
+///
+/// Dart writes the effective value (preference and network availability) at
+/// startup and on every toggle. A missing or unreadable value counts as private,
+/// so a background pass never issues a public transaction lookup the app did not
+/// authorize.
+enum BackgroundMigrationPrivateRecovery {
+  static let defaultsKey = "vizor.background_migration.private_recovery"
+
+  static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+    migrationPreparationPrivateRecoveryEnabled(
+      storedValue: defaults.string(forKey: defaultsKey)
+    )
+  }
+
+  static func set(_ enabled: Bool, defaults: UserDefaults = .standard) {
+    defaults.set(enabled ? "on" : "off", forKey: defaultsKey)
+  }
+}
+
+func migrationPreparationPrivateRecoveryEnabled(storedValue: String?) -> Bool {
+  storedValue != "off"
+}
+
 enum BackgroundMigrationPreparationPassResult: Equatable {
   case completed
   case waitingForConfirmations
@@ -524,12 +548,16 @@ func migrationPreparationResumeTarget(
   return .idle
 }
 
+/// With private recovery on, confirmations are observed by the foreground app.
+/// A background pass cannot advance the wallet's scanned state, so it can never
+/// accept a Status PIR anchor, and it must not fall back to public lookups.
 func migrationPreparationContinuedTaskDisposition(
-  _ resumeTarget: BackgroundMigrationPreparationResumeTarget
+  _ resumeTarget: BackgroundMigrationPreparationResumeTarget,
+  privateRecovery: Bool
 ) -> BackgroundMigrationPreparationContinuedTaskDisposition {
   switch resumeTarget {
   case .continuedProcessing:
-    return .trackConfirmations
+    return privateRecovery ? .foregroundOnly : .trackConfirmations
   case .backgroundProcessing:
     return .foregroundOnly
   case .idle, .terminal:
@@ -1115,7 +1143,8 @@ final class BackgroundMigrationPreparationManager {
       // Only take over a pending request when background tracking cannot make
       // progress on it anyway.
       let canTrackInBackground = migrationPreparationContinuedTaskDisposition(
-        self.preparationResumeTarget()
+        self.preparationResumeTarget(),
+        privateRecovery: BackgroundMigrationPrivateRecovery.isEnabled()
       ) == .trackConfirmations
       BGTaskScheduler.shared.getPendingTaskRequests { requests in
         let hasPendingRequest = requests.contains {
@@ -1247,8 +1276,11 @@ final class BackgroundMigrationPreparationManager {
     completion: @escaping (Bool) -> Void
   ) {
     pruneForegroundContinuationScopes()
+    let resumeTarget = preparationResumeTarget()
+    let privateRecovery = BackgroundMigrationPrivateRecovery.isEnabled()
     switch migrationPreparationContinuedTaskDisposition(
-      preparationResumeTarget()
+      resumeTarget,
+      privateRecovery: privateRecovery
     ) {
     case .trackConfirmations:
       break
@@ -1256,7 +1288,10 @@ final class BackgroundMigrationPreparationManager {
       BGTaskScheduler.shared.cancel(
         taskRequestWithIdentifier: Self.taskIdentifier
       )
-      recordSchedulingState("foreground_only")
+      recordSchedulingState(
+        privateRecovery && resumeTarget == .continuedProcessing
+          ? "blocked_private_recovery" : "foreground_only"
+      )
       cancelWatchdog()
       completion(false)
       return
@@ -1535,7 +1570,8 @@ final class BackgroundMigrationPreparationManager {
       submissionInFlight = false
     }
     let disposition = migrationPreparationContinuedTaskDisposition(
-      preparationResumeTarget()
+      preparationResumeTarget(),
+      privateRecovery: BackgroundMigrationPrivateRecovery.isEnabled()
     )
     switch disposition {
     case .trackConfirmations:
@@ -2009,23 +2045,24 @@ final class BackgroundMigrationPreparationManager {
       return .failure(.malformedResponse)
     }
     let protocolOrder = Data(storedOrder.reversed())
-    let privatePreference = UserDefaults.standard.bool(
-      forKey: "flutter.zcash_enhance_pir_enabled"
-    )
+    // Tracking is skipped in private mode; a pass that races a toggle to private
+    // makes no lookup at all rather than a private query that cannot conclude.
     let privateStatus = network.withCString {
-      zcash_status_pir_is_enabled($0, privatePreference)
+      zcash_status_pir_is_enabled($0, BackgroundMigrationPrivateRecovery.isEnabled())
+    }
+    if privateStatus {
+      return .failure(.coverageIncomplete)
     }
     let first = NativeLightwalletdClient.transaction(
       endpoint: endpoint,
       dbPath: dbPath,
-      privateStatus: privateStatus,
+      privateStatus: false,
       network: network,
       requiredThrough: requiredThrough,
       transactionId: protocolOrder,
       cancellation: cancellation
     )
-    guard !privateStatus,
-      protocolOrder != storedOrder,
+    guard protocolOrder != storedOrder,
       shouldTryStoredTransactionIdByteOrder(after: first)
     else {
       return first
@@ -2033,7 +2070,7 @@ final class BackgroundMigrationPreparationManager {
     let second = NativeLightwalletdClient.transaction(
       endpoint: endpoint,
       dbPath: dbPath,
-      privateStatus: privateStatus,
+      privateStatus: false,
       network: network,
       requiredThrough: requiredThrough,
       transactionId: storedOrder,

@@ -49,10 +49,26 @@ fn is_stale_routing_status(status: u16) -> bool {
     matches!(status, 409 | 410)
 }
 
-pub(super) fn rediscovery_cover_start(height: BlockHeight) -> BlockHeight {
-    BlockHeight::from_u32(
-        u32::from(height).saturating_sub(REDISCOVERY_COVER_BLOCKS.saturating_sub(1)),
-    )
+/// A cover range of up to [`REDISCOVERY_COVER_BLOCKS`] blocks containing `height`.
+/// `offset` (drawn uniformly below the cover size) shifts the window past the target
+/// so it is not always the range endpoint; `tip` caps the end at known chain state.
+pub(super) fn rediscovery_cover_range(
+    height: BlockHeight,
+    tip: Option<BlockHeight>,
+    offset: u32,
+) -> (BlockHeight, BlockHeight) {
+    let height = u32::from(height);
+    let tip = tip.map_or(height, |tip| u32::from(tip).max(height));
+    let end = height
+        .saturating_add(offset.min(REDISCOVERY_COVER_BLOCKS - 1))
+        .min(tip);
+    let start = end.saturating_sub(REDISCOVERY_COVER_BLOCKS - 1);
+    (BlockHeight::from_u32(start), BlockHeight::from_u32(end))
+}
+
+pub(super) fn random_rediscovery_offset() -> u32 {
+    use rand::Rng;
+    rand::thread_rng().gen_range(0..REDISCOVERY_COVER_BLOCKS)
 }
 
 pub(in crate::wallet::sync_engine) struct RoutedPayloadEnhancement {
@@ -456,15 +472,50 @@ mod tests {
     }
 
     #[test]
-    fn rediscovery_uses_a_trailing_hundred_block_cover_range() {
+    fn rediscovery_cover_range_hides_the_target_position() {
+        let h = BlockHeight::from_u32(1_000);
+        let tip = Some(BlockHeight::from_u32(2_000));
+        let mut target_positions = std::collections::HashSet::new();
+        for offset in 0..REDISCOVERY_COVER_BLOCKS {
+            let (start, end) = rediscovery_cover_range(h, tip, offset);
+            assert!(start <= h && h <= end, "offset {offset}");
+            assert_eq!(
+                u32::from(end) - u32::from(start),
+                REDISCOVERY_COVER_BLOCKS - 1
+            );
+            assert!(u32::from(start) >= 1_000 - (REDISCOVERY_COVER_BLOCKS - 1));
+            target_positions.insert(u32::from(end) - 1_000);
+        }
+        assert_eq!(target_positions.len(), REDISCOVERY_COVER_BLOCKS as usize);
+        // Out-of-range offsets are clamped to the cover size.
         assert_eq!(
-            rediscovery_cover_start(BlockHeight::from_u32(1_000)),
-            BlockHeight::from_u32(901),
+            rediscovery_cover_range(h, tip, u32::MAX),
+            (h, BlockHeight::from_u32(1_099)),
+        );
+    }
+
+    #[test]
+    fn rediscovery_cover_range_never_passes_the_known_tip() {
+        let h = BlockHeight::from_u32(1_000);
+        assert_eq!(
+            rediscovery_cover_range(h, Some(BlockHeight::from_u32(1_010)), 50),
+            (BlockHeight::from_u32(911), BlockHeight::from_u32(1_010)),
         );
         assert_eq!(
-            rediscovery_cover_start(BlockHeight::from_u32(50)),
-            BlockHeight::from_u32(0),
+            rediscovery_cover_range(h, None, 50),
+            (BlockHeight::from_u32(901), h),
         );
+        // A tip below the target (stale chain state) never excludes the target.
+        assert_eq!(
+            rediscovery_cover_range(h, Some(BlockHeight::from_u32(900)), 50),
+            (BlockHeight::from_u32(901), h),
+        );
+        assert_eq!(
+            rediscovery_cover_range(BlockHeight::from_u32(50), None, 0),
+            (BlockHeight::from_u32(0), BlockHeight::from_u32(50)),
+        );
+        let offset = random_rediscovery_offset();
+        assert!(offset < REDISCOVERY_COVER_BLOCKS);
     }
 
     #[test]

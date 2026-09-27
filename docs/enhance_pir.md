@@ -208,10 +208,11 @@ Custom transports return opaque checked `ResponseBody` values; both direct and
 Tor routes stream chunks through the request-provided collector.
 
 Rediscovery first reuses the current in-memory compact-block batch. When the
-required block is no longer cached, Vizor downloads a trailing 100-block range
-ending at that height. This avoids an isolated one-block request but remains an
-accepted limitation: an informed lightwalletd can infer that the range endpoint
-is the rediscovery height. No transaction ID is disclosed by this request.
+required block is no longer cached, Vizor downloads a 100-block range that
+contains that height at a uniformly random position, truncated at the wallet's
+known chain tip. The range endpoint therefore does not identify the rediscovery
+height, except near the tip, where the window cannot extend past the tip. No
+transaction ID is disclosed by this request.
 
 ### Typed policy and partial progress
 

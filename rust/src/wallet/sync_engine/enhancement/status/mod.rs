@@ -2,7 +2,9 @@
 //!
 //! A reader selects exactly one source for its lifetime. When private Status
 //! PIR is selected, initialization or observation failure is inconclusive and
-//! must not fall back to a public transaction-ID request.
+//! must not fall back to a public transaction-ID request. It also never fails
+//! the sync: the work stays durable and private status is skipped for the rest
+//! of the session, so a lagging or unreachable service cannot stall scanning.
 
 mod private;
 mod public;
@@ -86,11 +88,16 @@ where
     )
 }
 
+fn is_private(work: &TransactionStatusWork) -> bool {
+    matches!(work, TransactionStatusWork::Private(_))
+}
+
 pub(super) async fn run_requests<P, R>(
     reader: &mut RoutedStatusReader<P, R>,
     db: &mut WalletDatabase,
     work: &[TransactionStatusWork],
     attempted: &mut HashSet<TxId>,
+    private_failed: &mut bool,
     should_exit: &impl Fn() -> bool,
 ) -> Result<bool, SyncError>
 where
@@ -101,6 +108,7 @@ where
         .iter()
         .copied()
         .filter(|work| !attempted.contains(&work.txid()))
+        .filter(|work| !(*private_failed && is_private(work)))
         .collect();
     let actionable = !pending.is_empty();
     // set_transaction_status evaluates absence against this database's advertised chain tip.
@@ -115,6 +123,9 @@ where
         None => None,
     };
     for work in pending {
+        if *private_failed && is_private(&work) {
+            continue;
+        }
         if should_exit() {
             return Ok(actionable);
         }
@@ -127,6 +138,15 @@ where
                 continue;
             }
             Err(StatusError::Cancelled) => return Ok(actionable),
+            Err(error) if is_private(&work) => {
+                // Inconclusive: keep the work and stop querying the private
+                // service for this session. Never a public fallback.
+                log::warn!(
+                    "private status observation failed; deferring for this session: {error}"
+                );
+                *private_failed = true;
+                continue;
+            }
             Err(error) => return Err(SyncError::net(error.to_string())),
         };
         if should_exit() {

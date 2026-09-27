@@ -318,6 +318,29 @@ void main() {
     expect(find.textContaining('suspended'), findsNothing);
   });
 
+  for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+    testWidgets(
+      'private recovery discloses foreground-only migration confirmations on ${platform.name}',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        await tester.pumpWidget(_app(enhancePirEnabled: true));
+        await tester.pump();
+        final note = find.byKey(
+          const ValueKey('mobile_settings_enhance_pir_description'),
+        );
+        await tester.scrollUntilVisible(note, 200);
+        expect(
+          find.textContaining(
+            'migration confirmations are checked only when Vizor is open',
+          ),
+          platform == TargetPlatform.iOS ? findsOneWidget : findsNothing,
+        );
+        debugDefaultTargetPlatformOverride = null;
+      },
+    );
+  }
+
   testWidgets('Settings always opens coinholder voting', (tester) async {
     await tester.pumpWidget(_routedApp());
     await tester.pumpAndSettle();

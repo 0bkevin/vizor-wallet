@@ -58,12 +58,28 @@ class _Api extends RustLibApi {
 class _Store implements EnhancePirPreferenceStore {
   bool? value;
   bool fail = false;
+  List<String>? events;
   @override
   Future<bool?> readEnabled() async => value;
   @override
   Future<void> writeEnabled(bool enabled) async {
     if (fail) throw StateError('disk full');
+    events?.add('store:$enabled');
     value = enabled;
+  }
+}
+
+/// Records native background updates alongside store writes.
+class _Background {
+  _Background(this.events);
+  final List<String> events;
+  bool failEnable = false;
+  bool failDisable = false;
+  Future<void> call(bool enabled) async {
+    if (enabled ? failEnable : failDisable) {
+      throw StateError('native unavailable');
+    }
+    events.add('native:$enabled');
   }
 }
 
@@ -143,6 +159,7 @@ void main() {
     SyncNotifier sync, {
     bool initialEnabled = false,
     bool hasAccount = false,
+    _Background? background,
   }) => ProviderContainer(
     overrides: [
       appBootstrapProvider.overrideWithValue(
@@ -169,6 +186,8 @@ void main() {
       ),
       enhancePirPreferenceStoreProvider.overrideWithValue(store),
       syncProvider.overrideWith(() => sync),
+      if (background != null)
+        enhancePirBackgroundSinkProvider.overrideWithValue(background.call),
     ],
   );
   for (final stalled in [false, true]) {
@@ -265,6 +284,72 @@ void main() {
       expect(container.read(enhancePirProvider), isTrue);
     },
   );
+  test(
+    'background work turns private before commit and public after it',
+    () async {
+      final events = <String>[];
+      final store = _Store()..events = events;
+      final background = _Background(events);
+      final sync = _Sync()..gate.complete();
+      final container = setup(store, sync, background: background);
+      addTearDown(container.dispose);
+      final notifier = container.read(enhancePirProvider.notifier);
+
+      await notifier.set(true);
+      await notifier.set(false);
+
+      expect(events, [
+        'native:true',
+        'store:true',
+        'store:false',
+        'native:false',
+      ]);
+      expect(api.values, [true, false]);
+      expect(container.read(enhancePirProvider), isFalse);
+    },
+  );
+  test(
+    'enabling aborts before commit when background work cannot follow',
+    () async {
+      final events = <String>[];
+      final store = _Store()..events = events;
+      final background = _Background(events)..failEnable = true;
+      final sync = _Sync()..gate.complete();
+      final container = setup(store, sync, background: background);
+      addTearDown(container.dispose);
+
+      await container.read(enhancePirProvider.notifier).set(true);
+
+      expect(events, isEmpty);
+      expect(store.value, isNull);
+      expect(api.values, isEmpty);
+      expect(container.read(enhancePirProvider), isFalse);
+      expect(
+        container.read(enhancePirTransitionProvider),
+        contains('Try again'),
+      );
+    },
+  );
+  test('disabling commits even when background work stays private', () async {
+    final events = <String>[];
+    final store = _Store()..events = events;
+    final background = _Background(events)..failDisable = true;
+    final sync = _Sync()..gate.complete();
+    final container = setup(
+      store,
+      sync,
+      initialEnabled: true,
+      background: background,
+    );
+    addTearDown(container.dispose);
+
+    await container.read(enhancePirProvider.notifier).set(false);
+
+    expect(events, ['store:false']);
+    expect(api.values, [false]);
+    expect(container.read(enhancePirProvider), isFalse);
+    expect(container.read(enhancePirTransitionProvider), isNull);
+  });
   for (final failPause in [true, false]) {
     test(
       failPause

@@ -119,6 +119,15 @@ import UIKit
         BackgroundMigrationManager.shared.schedule { scheduled in
           DispatchQueue.main.async { result(scheduled) }
         }
+      case "setPrivateRecovery":
+        guard let arguments = call.arguments as? [String: Any],
+          let enabled = arguments["enabled"] as? Bool
+        else {
+          result(FlutterError(code: "invalid_arguments", message: "Missing private recovery value.", details: nil))
+          return
+        }
+        BackgroundMigrationPrivateRecovery.set(enabled)
+        result(true)
       case "startPreparation":
         if #available(iOS 26.0, *) {
           BackgroundMigrationPreparationManager.shared.start {

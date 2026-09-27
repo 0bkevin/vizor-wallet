@@ -138,6 +138,37 @@ impl<F: Fn() -> bool + Sync> StatusSession for PrivateStatusSession<'_, F> {
     }
 }
 
+/// A snapshot anchored below the caller's decision height still proves presence:
+/// mined, mempool, and forked records are positive observations. Drop the bound so
+/// the library queries instead of rejecting up front, and mark the lookup
+/// positive-only so absence is never reported for heights the snapshot does not cover.
+fn bound_coverage(
+    coverage: LocalCoverageContext,
+    anchor_height: u32,
+) -> (LocalCoverageContext, bool) {
+    match coverage.required_through {
+        Some(required) if required > anchor_height => (
+            LocalCoverageContext {
+                required_through: None,
+                ..coverage
+            },
+            true,
+        ),
+        _ => (coverage, false),
+    }
+}
+
+/// Absence proven only up to the anchor is inconclusive for a later decision height.
+fn require_bound_for_absence(
+    observation: Observation,
+    positive_only: bool,
+) -> Result<Observation, LookupError> {
+    match observation {
+        Observation::NotFound if positive_only => Err(LookupError::CoverageIncomplete),
+        observation => Ok(observation),
+    }
+}
+
 fn accepted_anchor(
     db: &WalletDatabase,
     manifest: &zakura_pir_status::Manifest,
@@ -202,9 +233,12 @@ impl<F: Fn() -> bool + Sync> PrivateStatusSession<'_, F> {
     ) -> Result<TransactionObservation, LookupError> {
         let mut client = self.client.lock().await;
         let mut retried = false;
+        let mut positive_only;
         let observation = loop {
             self.check_anchor(&client)?;
-            let result = client.observe(&self.route, txid.as_ref(), coverage).await;
+            let bounded;
+            (bounded, positive_only) = bound_coverage(coverage, client.manifest().anchor_height);
+            let result = client.observe(&self.route, txid.as_ref(), bounded).await;
             let conflict = matches!(&result, Err(Error::Unavailable))
                 && self.route.take_status_session_conflict();
             match result {
@@ -215,6 +249,7 @@ impl<F: Fn() -> bool + Sync> PrivateStatusSession<'_, F> {
                 result => break result.map_err(classify)?,
             }
         };
+        let observation = require_bound_for_absence(observation, positive_only)?;
         self.check_anchor(&client)?;
         if (self.should_exit)() {
             return Err(LookupError::Cancelled);
@@ -306,5 +341,45 @@ mod tests {
         );
         assert_eq!(classify(Error::Stale), LookupError::Stale);
         assert_eq!(classify(Error::Unavailable), LookupError::Unavailable);
+    }
+
+    fn coverage(required_through: Option<u32>) -> LocalCoverageContext {
+        LocalCoverageContext {
+            earliest_possible_inclusion: Some(90),
+            required_through,
+        }
+    }
+
+    #[test]
+    fn decision_height_above_anchor_queries_positive_only() {
+        let (bounded, positive_only) = bound_coverage(coverage(Some(110)), 100);
+        assert_eq!(bounded.required_through, None);
+        assert_eq!(bounded.earliest_possible_inclusion, Some(90));
+        assert!(positive_only);
+
+        for required in [Some(100), Some(99), None] {
+            let (bounded, positive_only) = bound_coverage(coverage(required), 100);
+            assert_eq!(bounded.required_through, required);
+            assert!(!positive_only);
+        }
+    }
+
+    #[test]
+    fn positive_only_lookup_never_reports_absence() {
+        assert_eq!(
+            require_bound_for_absence(Observation::NotFound, true),
+            Err(LookupError::CoverageIncomplete)
+        );
+        assert_eq!(
+            require_bound_for_absence(Observation::NotFound, false),
+            Ok(Observation::NotFound)
+        );
+        for positive in [
+            Observation::Mined(100),
+            Observation::Mempool,
+            Observation::Forked,
+        ] {
+            assert_eq!(require_bound_for_absence(positive, true), Ok(positive));
+        }
     }
 }

@@ -26,7 +26,10 @@ use super::{
         super::{block_source::MemoryBlockSource, SyncError, WalletDatabase},
         transport::await_request_with_cancel,
     },
-    private::{rediscovery_cover_start, EnhancePirRunError, RoutedPayloadEnhancement},
+    private::{
+        random_rediscovery_offset, rediscovery_cover_range, EnhancePirRunError,
+        RoutedPayloadEnhancement,
+    },
     public::PublicPayloadExecutor,
 };
 
@@ -177,14 +180,18 @@ impl EnhancementEffects<WalletDatabase> for ProductionEnhancementEffects<'_> {
         {
             block
         } else {
-            // Fetch a trailing cover range rather than one isolated block.
-            // Accepted limitation: the requested height remains the range endpoint,
-            // so an informed lightwalletd can still infer the height of interest.
+            // Fetch a cover range rather than one isolated block, with the target
+            // at a random position so the range does not reveal its height.
+            // Near the known tip the window is truncated there.
+            let tip = zcash_client_backend::data_api::WalletRead::chain_height(&*db)
+                .map_err(|e| SyncError::db(format!("chain_height: {e}")))?;
+            let (start, end) =
+                rediscovery_cover_range(request.height, tip, random_rediscovery_offset());
             downloaded = await_request_with_cancel(
                 crate::wallet::sync_engine::lwd::download_blocks(
                     self.lwd,
-                    rediscovery_cover_start(request.height),
-                    request.height,
+                    start,
+                    end,
                     self.network,
                 ),
                 should_exit,

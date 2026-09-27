@@ -687,6 +687,7 @@ mod tests {
             &mut db,
             &work,
             &mut attempted,
+            &mut false,
             &|| false
         )
         .await
@@ -696,6 +697,7 @@ mod tests {
             &mut db,
             &work,
             &mut attempted,
+            &mut false,
             &|| false
         )
         .await
@@ -711,6 +713,112 @@ mod tests {
             db.get_tx_height(tx.txid()).unwrap(),
             Some(BlockHeight::from_u32(100))
         );
+    }
+
+    fn private_status_work_db() -> (tempfile::NamedTempFile, WalletDatabase, TxId) {
+        let (file, mut db, tx) =
+            scanned_transaction_missing_fee_test_db(BlockHeight::from_u32(100));
+        rusqlite::Connection::open(file.path())
+            .unwrap()
+            .execute(
+                "INSERT INTO tx_retrieval_queue (txid, query_type) VALUES (?1, 1)",
+                rusqlite::params![tx.txid().as_ref()],
+            )
+            .unwrap();
+        db.set_status_mode(TransactionStatusMode::Private);
+        (file, db, tx.txid())
+    }
+
+    #[tokio::test]
+    async fn private_status_errors_are_deferred_for_the_session_without_failing_sync() {
+        use zakura_transaction_status::{StatusError, StatusObservation};
+        for error in [
+            StatusError::Unsupported,
+            StatusError::Unavailable,
+            StatusError::Stale,
+            StatusError::Timeout,
+            StatusError::Malformed,
+            StatusError::Transport { code: 14 },
+        ] {
+            let (_file, mut db, txid) = private_status_work_db();
+            let work = vec![db.transaction_status_work_for(txid).unwrap()];
+            let public = status_source(Ok(StatusObservation::NotFound));
+            let public_opens = public.opens.clone();
+            let private = status_source(Err(error));
+            let requests = private.requests.clone();
+            let mut reader = super::super::status::RoutedStatusReader::new(public, private);
+            let mut private_failed = false;
+
+            assert!(
+                super::super::status::run_requests(
+                    &mut reader,
+                    &mut db,
+                    &work,
+                    &mut std::collections::HashSet::new(),
+                    &mut private_failed,
+                    &|| false,
+                )
+                .await
+                .unwrap(),
+                "{error:?} must not fail the sync"
+            );
+            assert!(private_failed, "{error:?} must latch private status off");
+
+            // A later checkpoint in the same session starts with a fresh attempted
+            // set but must not query the failed private service again.
+            assert!(!super::super::status::run_requests(
+                &mut reader,
+                &mut db,
+                &work,
+                &mut std::collections::HashSet::new(),
+                &mut private_failed,
+                &|| false,
+            )
+            .await
+            .unwrap());
+
+            assert_eq!(requests.lock().unwrap().len(), 1, "{error:?}");
+            assert_eq!(public_opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(
+                db.transaction_status_work_for(txid).unwrap(),
+                work[0],
+                "{error:?} must leave the status obligation pending"
+            );
+            assert_eq!(
+                db.get_tx_height(txid).unwrap(),
+                Some(BlockHeight::from_u32(100))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn public_status_errors_still_fail_sync() {
+        use zakura_transaction_status::{StatusError, StatusObservation};
+        use zcash_client_backend::data_api::status::{
+            PublicTransactionStatusRequest, TransactionStatusWork,
+        };
+        let (_file, mut db, txid) = private_status_work_db();
+        let work = vec![TransactionStatusWork::Public(
+            PublicTransactionStatusRequest::new(txid),
+        )];
+        let mut reader = super::super::status::RoutedStatusReader::new(
+            status_source(Err(StatusError::Unavailable)),
+            status_source(Ok(StatusObservation::NotFound)),
+        );
+        let mut private_failed = false;
+        assert!(matches!(
+            super::super::status::run_requests(
+                &mut reader,
+                &mut db,
+                &work,
+                &mut std::collections::HashSet::new(),
+                &mut private_failed,
+                &|| false,
+            )
+            .await,
+            Err(SyncError::Network(_))
+        ));
+        assert!(!private_failed);
     }
 
     #[tokio::test]

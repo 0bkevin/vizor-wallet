@@ -228,8 +228,15 @@ Private Status PIR validates:
 5. the anchor again after the query.
 
 HTTP 409/410 permits one private-session refresh. Other failures remain
-inconclusive. `Mempool` and `Forked` are distinct source observations but both
-persist as the wallet's not-in-main-chain state.
+inconclusive and never fail the sync. After the first private failure other
+than coverage, the session stops querying the private service and leaves the
+remaining private status work pending until the next sync.
+
+Each lookup carries the wallet's chain tip as its decision height. When the
+snapshot anchor is below it, the lookup drops the bound and accepts only
+positive records; a missing record is then `CoverageIncomplete`. `Mempool` and
+`Forked` are distinct source observations but both persist as the wallet's
+not-in-main-chain state.
 
 ## Transparent history and fees
 
@@ -291,7 +298,9 @@ private outside coverage      keep work; wait for a newer snapshot
 private authenticated reroute reread DB; public dispatch is now permitted
 public explicit NotFound      complete payload work only
 public other failure          keep payload work retryable
-private status failure        keep status inconclusive; no public fallback
+private status failure        keep status inconclusive; skip private status for
+                              the rest of the session; no public fallback
+public status failure         fail the sync attempt (retried by the sync loop)
 address-history failure       keep range unacknowledged
 cancellation                  stop before the next network dispatch
 ```

@@ -41,6 +41,7 @@ import 'src/features/activity/screens/swap_activity_detail_screen.dart';
 import 'src/features/accounts/screens/accounts_screen.dart';
 import 'src/features/address_book/screens/address_book_screen.dart';
 import 'src/features/home/screens/home_screen.dart';
+import 'src/features/migration/services/ironwood_migration_background_credential_store.dart';
 import 'src/features/donation/donation_config.dart';
 import 'src/features/donation/screens/donation_screen.dart';
 import 'src/features/ledger/ledger_capability.dart';
@@ -213,15 +214,30 @@ Future<Widget> buildBootstrappedZcashWalletApp({
   List<Override> overrides = const [],
 }) async {
   final bootstrap = await loadAppBootstrap();
-  rust_sync.setEnhancePirEnabled(
-    enabled:
-        bootstrap.enhancePirEnabled &&
-        isEnhancePirAvailableForNetwork(bootstrap.network),
-  );
+  await _applyEnhancePirPolicy(bootstrap);
   return BootstrappedZcashWalletApp(
     initialBootstrap: bootstrap,
     overrides: overrides,
   );
+}
+
+/// Applies the saved private Ironwood recovery setting to Rust and to native
+/// background work before any sync or background preparation can start.
+Future<void> _applyEnhancePirPolicy(AppBootstrapState bootstrap) async {
+  final enabled =
+      bootstrap.enhancePirEnabled &&
+      isEnhancePirAvailableForNetwork(bootstrap.network);
+  rust_sync.setEnhancePirEnabled(enabled: enabled);
+  try {
+    await IronwoodMigrationBackgroundLifecycle.instance.setPrivateRecovery(
+      enabled,
+    );
+  } catch (error) {
+    // Native keeps its last value, or private when it never received one.
+    log(
+      'bootstrap: could not apply private recovery to background work: $error',
+    );
+  }
 }
 
 Widget buildZcashWalletApp({
@@ -260,11 +276,7 @@ class _BootstrappedZcashWalletAppState
 
   Future<void> _reloadBootstrap() async {
     final bootstrap = await loadAppBootstrap();
-    rust_sync.setEnhancePirEnabled(
-      enabled:
-          bootstrap.enhancePirEnabled &&
-          isEnhancePirAvailableForNetwork(bootstrap.network),
-    );
+    await _applyEnhancePirPolicy(bootstrap);
     if (!mounted) return;
     setState(() {
       _bootstrap = bootstrap;

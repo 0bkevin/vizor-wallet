@@ -657,6 +657,15 @@ while an executed denomination preparation waits for confirmations.
   than proving the migration failed. Expiry posts no notification of its own:
   scopes whose waves already confirmed keep their earlier step-confirmed
   alert, and the interrupted wave resumes when the re-armed task runs.
+- While private Ironwood recovery is on, the task does not track
+  confirmations. A background pass cannot advance the wallet's scanned
+  state, so it can never accept a Status PIR anchor, and it must not fall back
+  to a public `GetTransaction`. `migrationPreparationContinuedTaskDisposition`
+  maps a continued-processing target to `.foregroundOnly`, so the task is not
+  submitted (`blocked_private_recovery`) and a launched task hands off to the
+  foreground. Dart sends the effective setting through the
+  `setPrivateRecovery` channel method at startup and on every toggle. Native
+  treats a value it never received as private.
 
 ### Send Flow
 
