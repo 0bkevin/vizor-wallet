@@ -225,11 +225,29 @@ fn draft_replay_uses_persisted_targets_instead_of_legacy_schedule_order() {
 }
 
 #[test]
-fn migration_stop_preserves_zero_as_the_no_expiry_sentinel() {
-    assert!(!migration_stop_candidate_is_expired(0, u32::MAX));
-    assert!(!migration_stop_candidate_is_expired(200, 199));
-    assert!(migration_stop_candidate_is_expired(200, 200));
-    assert!(migration_stop_candidate_is_expired(200, 201));
+fn migration_stop_discards_only_what_local_scanning_proves_dead() {
+    use MigrationStopDisposition::{Block, Discard, Tracked};
+
+    assert_eq!(classify_migration_stop_candidate(true, 200, None), Tracked);
+    assert_eq!(classify_migration_stop_candidate(true, 0, None), Tracked);
+    assert_eq!(
+        classify_migration_stop_candidate(false, 200, Some(200)),
+        Discard
+    );
+    assert_eq!(
+        classify_migration_stop_candidate(false, 200, Some(201)),
+        Discard
+    );
+    assert_eq!(
+        classify_migration_stop_candidate(false, 200, Some(199)),
+        Block
+    );
+    assert_eq!(classify_migration_stop_candidate(false, 200, None), Block);
+    // Zero is the legacy no-expiry sentinel and never proves absence.
+    assert_eq!(
+        classify_migration_stop_candidate(false, 0, Some(u32::MAX)),
+        Block
+    );
 }
 
 #[test]
@@ -1425,23 +1443,155 @@ fn stop_skips_network_for_transactions_that_were_never_attempted() {
         .unwrap();
 }
 
-#[test]
-fn native_attempt_state_requires_network_reconciliation() {
-    let (_temp_dir, db_path, run_id, pending_txid) = create_outbox_receipt_test_run(69_120);
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+/// An outbox run inside a real wallet schema, which stop reads for local
+/// evidence.
+fn stop_candidate_test_run() -> (tempfile::TempDir, String, String, String) {
+    let run = create_outbox_receipt_test_run(69_120);
+    crate::wallet::keys::ensure_db_initialized(&run.1, WalletNetwork::Test).unwrap();
+    run
+}
 
-    let error = runtime
-        .block_on(reconcile_scheduled_migration_txs_before_abandon(
-            &db_path,
+fn stop_with_native_attempts(
+    db_path: &str,
+    run_id: &str,
+    attempted: &[String],
+) -> Result<(), String> {
+    // The unusable endpoint proves stop settles these candidates without
+    // opening any connection.
+    tokio::runtime::Runtime::new().unwrap().block_on(
+        reconcile_scheduled_migration_txs_before_abandon(
+            db_path,
             "not-a-lightwalletd-url",
             WalletNetwork::Test,
             MIGRATION_TEST_ACCOUNT,
-            &run_id,
-            &[pending_txid],
-        ))
+            run_id,
+            attempted,
+        ),
+    )
+}
+
+fn remaining_stop_candidate_txids(db_path: &str, run_id: &str) -> Vec<String> {
+    migration::scheduled_migration_stop_candidates(
+        db_path,
+        MIGRATION_TEST_ACCOUNT,
+        WalletNetwork::Test,
+        run_id,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|candidate| candidate.txid_hex)
+    .collect()
+}
+
+fn seed_local_transaction_bytes(db_path: &str, txid_hex: &str) {
+    Connection::open(db_path)
+        .unwrap()
+        .execute(
+            "INSERT INTO transactions (txid, raw, min_observed_height) VALUES (?1, ?2, 100)",
+            params![hex::decode(txid_hex).unwrap(), vec![5u8, 6, 7, 8]],
+        )
+        .unwrap();
+}
+
+fn seed_block(conn: &Connection, height: u32) {
+    conn.execute(
+        "INSERT INTO blocks (height, hash, time, sapling_tree, sapling_commitment_tree_size)
+         VALUES (?1, ?2, 0, X'', 0)",
+        params![height, vec![0x42u8; 32]],
+    )
+    .unwrap();
+}
+
+fn seed_local_mined_transaction(db_path: &str, txid_hex: &str, height: u32) {
+    let conn = Connection::open(db_path).unwrap();
+    seed_block(&conn, height);
+    conn.execute(
+        "INSERT INTO transactions (txid, block, mined_height, min_observed_height)
+         VALUES (?1, ?2, ?2, ?2)",
+        params![hex::decode(txid_hex).unwrap(), height],
+    )
+    .unwrap();
+}
+
+/// Makes `block_fully_scanned` report `height`: a wallet birthday, one
+/// Scanned range starting at it, and the range's terminal block.
+fn seed_fully_scanned_through(db_path: &str, height: u32) {
+    let seed =
+        crate::wallet::keys::mnemonic_to_seed(&crate::wallet::keys::generate_mnemonic()).unwrap();
+    crate::wallet::keys::init_db_and_create_account(
+        db_path,
+        WalletNetwork::Test,
+        &seed,
+        Some(100),
+        "scanned",
+    )
+    .unwrap();
+    let conn = Connection::open(db_path).unwrap();
+    conn.execute("DELETE FROM scan_queue", []).unwrap();
+    conn.execute(
+        "INSERT INTO scan_queue (block_range_start, block_range_end, priority)
+         VALUES (100, ?1, 10)",
+        params![height + 1],
+    )
+    .unwrap();
+    seed_block(&conn, height);
+}
+
+#[test]
+fn attempted_stop_candidate_without_local_evidence_blocks_without_network() {
+    let (_temp_dir, db_path, run_id, pending_txid) = stop_candidate_test_run();
+
+    let error = stop_with_native_attempts(&db_path, &run_id, std::slice::from_ref(&pending_txid))
         .unwrap_err();
 
-    assert!(error.starts_with("Open migration stop reconciliation endpoint:"));
+    assert!(
+        error.starts_with(&format!(
+            "Migration cannot stop until transaction {pending_txid} is confirmed or expires at block 69120."
+        )),
+        "{error}"
+    );
+}
+
+#[test]
+fn stop_accepts_an_attempted_transaction_the_wallet_already_stores() {
+    let (_temp_dir, db_path, run_id, pending_txid) = stop_candidate_test_run();
+    seed_local_transaction_bytes(&db_path, &pending_txid);
+
+    stop_with_native_attempts(&db_path, &run_id, std::slice::from_ref(&pending_txid)).unwrap();
+
+    // Marked broadcasted with local bytes, so it is no longer a candidate.
+    assert!(!remaining_stop_candidate_txids(&db_path, &run_id).contains(&pending_txid));
+}
+
+#[test]
+fn stop_accepts_an_attempted_split_the_wallet_scanned_as_mined() {
+    let (_temp_dir, db_path, run_id, _) = stop_candidate_test_run();
+    let stage_txid = "10".repeat(32);
+    assert!(remaining_stop_candidate_txids(&db_path, &run_id).contains(&stage_txid));
+    seed_local_mined_transaction(&db_path, &stage_txid, 95);
+
+    stop_with_native_attempts(&db_path, &run_id, std::slice::from_ref(&stage_txid)).unwrap();
+
+    // The stage is marked broadcasted and leaves the pending stop set.
+    assert!(!remaining_stop_candidate_txids(&db_path, &run_id).contains(&stage_txid));
+}
+
+#[test]
+fn stop_discards_an_attempted_transaction_absent_through_its_expiry() {
+    let (_temp_dir, db_path, run_id, pending_txid) = stop_candidate_test_run();
+    seed_fully_scanned_through(&db_path, 69_120);
+
+    stop_with_native_attempts(&db_path, &run_id, &[pending_txid]).unwrap();
+}
+
+#[test]
+fn stop_blocks_while_scanning_has_not_reached_the_expiry() {
+    let (_temp_dir, db_path, run_id, pending_txid) = stop_candidate_test_run();
+    seed_fully_scanned_through(&db_path, 69_119);
+
+    let error = stop_with_native_attempts(&db_path, &run_id, &[pending_txid]).unwrap_err();
+
+    assert!(error.contains("expires at block 69120"), "{error}");
 }
 
 #[test]
@@ -1455,13 +1605,23 @@ fn legacy_attempt_state_reconciles_only_after_its_broadcast_height() {
     };
 
     assert!(!migration_stop_candidate_requires_reconciliation(
-        &candidate, false, 199,
+        &candidate,
+        false,
+        Some(199),
     ));
     assert!(migration_stop_candidate_requires_reconciliation(
-        &candidate, false, 200,
+        &candidate,
+        false,
+        Some(200),
     ));
     assert!(migration_stop_candidate_requires_reconciliation(
-        &candidate, true, 199,
+        &candidate,
+        true,
+        Some(199),
+    ));
+    // Without a tip, a legacy row fails closed as attempted.
+    assert!(migration_stop_candidate_requires_reconciliation(
+        &candidate, false, None,
     ));
 }
 
@@ -3441,7 +3601,9 @@ fn ledger_shielding_limits_inputs_and_preserves_account_scope_paths() {
             .unwrap()
             .contains("incomplete")
     );
-    assert!(get_ledger_shielding_progress(path, network, &uuid).unwrap_err().contains("incomplete"));
+    assert!(get_ledger_shielding_progress(path, network, &uuid)
+        .unwrap_err()
+        .contains("incomplete"));
     let progress = ledger_shielding_progress(&mut db, network, id).unwrap();
     assert_eq!(progress.input_limit, 32);
     assert_eq!(progress.input_count, 35);
@@ -3503,20 +3665,34 @@ fn ledger_shielding_limits_inputs_and_preserves_account_scope_paths() {
         .transparent_inputs()
         .iter()
         .all(|u| !first.contains(u.outpoint())));
-    conn.execute("DELETE FROM transparent_received_outputs", []).unwrap();
-    assert_eq!(ledger_shielding_progress(&mut db, network, id).unwrap().input_count, 0);
-    let dust_address = external.derive_address(NonHardenedChildIndex::ZERO).unwrap();
+    conn.execute("DELETE FROM transparent_received_outputs", [])
+        .unwrap();
+    assert_eq!(
+        ledger_shielding_progress(&mut db, network, id)
+            .unwrap()
+            .input_count,
+        0
+    );
+    let dust_address = external
+        .derive_address(NonHardenedChildIndex::ZERO)
+        .unwrap();
     let dust = WalletTransparentOutput::from_parts(
         OutPoint::new([240; 32], 0),
         // Above the spendable-output fee floor, below the shielding threshold.
-        TxOut::new(Zatoshis::const_from_u64(50_000), dust_address.script().into()),
-        Some(tip), None, None, None,
-    ).unwrap();
+        TxOut::new(
+            Zatoshis::const_from_u64(50_000),
+            dust_address.script().into(),
+        ),
+        Some(tip),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     db.put_received_transparent_utxo(&dust).unwrap();
     let progress = ledger_shielding_progress(&mut db, network, id).unwrap();
     assert_eq!(progress.input_count, 1);
     assert!(progress.below_threshold);
-
 }
 #[test]
 fn gift_card_ledger_preflight_counts_pool_actions_at_the_consensus_version() {

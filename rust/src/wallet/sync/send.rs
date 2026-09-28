@@ -2337,14 +2337,28 @@ async fn reconcile_scheduled_migration_txs_before_abandon(
         return Ok(());
     }
 
-    let mut client = sync_engine::open_lwd_channel(lightwalletd_url)
-        .await
-        .map_err(|e| format!("Open migration stop reconciliation endpoint: {e}"))?;
-    let chain_tip = sync_engine::get_latest_block_recorded(&mut client, lightwalletd_url, network)
-        .await
-        .map_err(|e| format!("Read migration stop reconciliation chain tip: {e}"))?;
-    let chain_tip_height = u32::try_from(chain_tip.height)
-        .map_err(|_| "Migration stop reconciliation chain tip exceeds u32")?;
+    // Only a legacy row without a durable attempt marker needs the chain tip,
+    // to tell whether its broadcast height was reached. The request carries no
+    // transaction ID.
+    let needs_chain_tip = candidates.iter().any(|candidate| {
+        candidate.attempt_state == super::migration::MigrationBroadcastAttemptState::UnknownLegacy
+            && !native_attempted_txids.contains(&candidate.txid_hex.to_ascii_lowercase())
+    });
+    let chain_tip_height = if needs_chain_tip {
+        let mut client = sync_engine::open_lwd_channel(lightwalletd_url)
+            .await
+            .map_err(|e| format!("Open migration stop reconciliation endpoint: {e}"))?;
+        let chain_tip =
+            sync_engine::get_latest_block_recorded(&mut client, lightwalletd_url, network)
+                .await
+                .map_err(|e| format!("Read migration stop reconciliation chain tip: {e}"))?;
+        Some(
+            u32::try_from(chain_tip.height)
+                .map_err(|_| "Migration stop reconciliation chain tip exceeds u32")?,
+        )
+    } else {
+        None
+    };
 
     let attempted_candidates = candidates
         .into_iter()
@@ -2356,54 +2370,55 @@ async fn reconcile_scheduled_migration_txs_before_abandon(
             )
         })
         .collect::<Vec<_>>();
+    if attempted_candidates.is_empty() {
+        return Ok(());
+    }
+
+    // Stop never asks a server about these transaction IDs: they are the
+    // Ironwood migration transactions private mode protects. Local wallet
+    // state answers the only question stop has, which is whether abandoning
+    // may release an attempted transaction's inputs. See
+    // `classify_migration_stop_candidate`.
+    let fully_scanned_height = wallet_fully_scanned_height(db_path, network)?;
+    let conn = open_wallet_raw_conn_with_timeout(db_path, READ_DB_BUSY_TIMEOUT)?;
     for candidate in attempted_candidates {
-        let txid = parse_txid_hex(&candidate.txid_hex)?;
-        match sync_engine::get_transaction(&mut client, txid.as_ref().to_vec()).await {
-            Ok(raw_tx) => {
-                decrypt_and_store_migration_tx(db_path, network, &raw_tx.data)?;
-                match candidate.kind {
-                    super::migration::MigrationStopCandidateKind::MigrationTransaction => {
-                        super::migration::mark_pending_broadcasted(
-                            db_path,
-                            expected_run_id,
-                            &candidate.txid_hex,
-                        )?;
-                    }
-                    super::migration::MigrationStopCandidateKind::DenominationStage => {
-                        let conn =
-                            open_wallet_raw_conn_with_timeout(db_path, READ_DB_BUSY_TIMEOUT)?;
-                        super::migration::mark_denomination_stage_broadcasted(
-                            &conn,
-                            expected_run_id,
-                            &candidate.txid_hex,
-                        )?;
-                    }
+        let tracked = super::migration::local_transaction_raw(&conn, &candidate.txid_hex)?
+            .is_some()
+            || super::migration::local_denomination_chain_identity(&conn, &candidate.txid_hex)?
+                .is_some();
+        match classify_migration_stop_candidate(
+            tracked,
+            candidate.expiry_height,
+            fully_scanned_height,
+        ) {
+            MigrationStopDisposition::Tracked => match candidate.kind {
+                super::migration::MigrationStopCandidateKind::MigrationTransaction => {
+                    super::migration::mark_pending_broadcasted(
+                        db_path,
+                        expected_run_id,
+                        &candidate.txid_hex,
+                    )?;
                 }
-            }
-            Err(status) if status.code() == Code::NotFound => {
-                // Before expiry an attempted submission may have been accepted
-                // moments ago but not indexed yet. At or after expiry, the
-                // same endpoint's chain tip proves an absent transaction can
-                // no longer be mined, so stop may safely discard it. Zero is
-                // the legacy no-expiry sentinel and never provides that proof.
-                if migration_stop_candidate_is_expired(candidate.expiry_height, chain_tip_height) {
-                    continue;
+                super::migration::MigrationStopCandidateKind::DenominationStage => {
+                    super::migration::mark_denomination_stage_broadcasted(
+                        &conn,
+                        expected_run_id,
+                        &candidate.txid_hex,
+                    )?;
                 }
-                if candidate.expiry_height == 0 {
-                    return Err(format!(
-                        "Migration cannot stop until non-expiring transaction {} is reconciled",
-                        candidate.txid_hex
-                    ));
-                }
+            },
+            MigrationStopDisposition::Discard => {}
+            MigrationStopDisposition::Block if candidate.expiry_height == 0 => {
                 return Err(format!(
-                    "Migration cannot stop until transaction {} is reconciled or expires at block {}",
-                    candidate.txid_hex, candidate.expiry_height
+                    "Migration cannot stop until non-expiring transaction {} is confirmed",
+                    candidate.txid_hex
                 ));
             }
-            Err(status) => {
+            MigrationStopDisposition::Block => {
                 return Err(format!(
-                    "Could not reconcile migration transaction {} before stopping: {status}",
-                    candidate.txid_hex
+                    "Migration cannot stop until transaction {} is confirmed or expires at block {}. \
+                     A recently submitted transaction is recognized after the wallet syncs.",
+                    candidate.txid_hex, candidate.expiry_height
                 ));
             }
         }
@@ -2411,21 +2426,72 @@ async fn reconcile_scheduled_migration_txs_before_abandon(
     Ok(())
 }
 
-fn migration_stop_candidate_is_expired(expiry_height: u32, chain_tip_height: u32) -> bool {
-    expiry_height > 0 && chain_tip_height >= expiry_height
+/// What local wallet state proves about an attempted migration transaction
+/// when the user stops its run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MigrationStopDisposition {
+    /// The wallet stores the transaction's bytes or its mined block. The
+    /// wallet treats its inputs as spent until it is mined or expires, so
+    /// abandoning the run cannot release them early.
+    Tracked,
+    /// The wallet has fully scanned through the expiry height without seeing
+    /// the transaction, so it can never be mined.
+    Discard,
+    /// Neither holds. The transaction may still be accepted and mined, so its
+    /// inputs must stay locked.
+    Block,
 }
 
+/// Decides a stop candidate from local evidence only.
+///
+/// Migration and denomination-split transactions spend wallet Orchard notes.
+/// If one is mined, compact-block scanning matches its nullifiers, so a
+/// wallet that has fully scanned through `expiry_height` would already track
+/// it. After that height it can no longer be mined. Zero is the legacy
+/// no-expiry sentinel and never proves this.
+fn classify_migration_stop_candidate(
+    tracked: bool,
+    expiry_height: u32,
+    fully_scanned_height: Option<u32>,
+) -> MigrationStopDisposition {
+    if tracked {
+        MigrationStopDisposition::Tracked
+    } else if expiry_height > 0
+        && fully_scanned_height.is_some_and(|scanned| scanned >= expiry_height)
+    {
+        MigrationStopDisposition::Discard
+    } else {
+        MigrationStopDisposition::Block
+    }
+}
+
+/// The last height of the contiguous scanned range that starts at the wallet
+/// birthday, or `None` when no such range exists.
+fn wallet_fully_scanned_height(
+    db_path: &str,
+    network: WalletNetwork,
+) -> Result<Option<u32>, String> {
+    use zcash_client_backend::data_api::WalletRead;
+    let db = super::open_wallet_db_for_read(db_path, network)?;
+    Ok(db
+        .block_fully_scanned()
+        .map_err(|e| format!("Read fully scanned height before migration stop: {e}"))?
+        .map(|block| u32::from(block.block_height())))
+}
+
+/// `chain_tip_height` is `None` when no legacy row needs it. A legacy row
+/// without a tip is then treated as attempted, which fails closed.
 fn migration_stop_candidate_requires_reconciliation(
     candidate: &super::migration::MigrationStopCandidate,
     native_attempted: bool,
-    chain_tip_height: u32,
+    chain_tip_height: Option<u32>,
 ) -> bool {
     native_attempted
         || match candidate.attempt_state {
             super::migration::MigrationBroadcastAttemptState::NotAttempted => false,
             super::migration::MigrationBroadcastAttemptState::Attempted => true,
             super::migration::MigrationBroadcastAttemptState::UnknownLegacy => {
-                candidate.broadcast_height <= chain_tip_height
+                chain_tip_height.is_none_or(|tip| candidate.broadcast_height <= tip)
             }
         }
 }
