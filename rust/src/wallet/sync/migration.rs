@@ -4605,6 +4605,27 @@ pub(crate) fn abandon_run(
         return Err("Migration phase changed while stopping; retry.".to_string());
     }
 
+    // Only now, after the recheck, record that the wallet tracks these. Doing
+    // it earlier would hide them from a retry after a failed recheck.
+    for tracked in &evidence.tracked {
+        match tracked.kind {
+            MigrationStopCandidateKind::MigrationTransaction => {
+                tx.execute(
+                    &format!(
+                        "UPDATE {PENDING_TXS_TABLE}
+                         SET status = 'broadcasted'
+                         WHERE run_id = ?1 AND txid_hex = ?2 AND status = 'scheduled'"
+                    ),
+                    params![expected_run_id, tracked.txid_hex],
+                )
+                .map_err(|e| format!("Keep tracked migration transaction: {e}"))?;
+            }
+            MigrationStopCandidateKind::DenominationStage => {
+                mark_denomination_stage_broadcasted(&tx, expected_run_id, &tracked.txid_hex)?;
+            }
+        }
+    }
+
     // A prepared child PCZT has not reached the network. Once the run is
     // terminal it must never be promoted by a later foreground retry.
     tx.execute(
@@ -7526,12 +7547,19 @@ pub(crate) fn local_denomination_chain_identity(
 /// Local evidence a migration stop relied on.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct StopEvidence {
-    /// Attempted transactions, with their expiry heights, that stop let the
-    /// wallet's own records protect.
-    pub tracked: Vec<(String, u32)>,
+    /// Attempted transactions that stop let the wallet's own records protect.
+    pub tracked: Vec<TrackedStopTransaction>,
     /// The scanned block, by height and hash, that stop matched against the
     /// current chain before discarding transactions.
     pub verified_scan: Option<(u32, [u8; 32])>,
+}
+
+/// An attempted transaction whose inputs the wallet's own records hold.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TrackedStopTransaction {
+    pub kind: MigrationStopCandidateKind,
+    pub txid_hex: String,
+    pub expiry_height: u32,
 }
 
 /// The chain tip the wallet judges expiry against, as librustzcash computes
@@ -7581,8 +7609,13 @@ fn verify_stop_evidence(
         "The wallet's chain changed while the migration was stopping. Try stopping again.";
     if !evidence.tracked.is_empty() {
         let chain_tip_height = wallet_chain_tip(conn)?;
-        for (txid_hex, expiry_height) in &evidence.tracked {
-            if !stop_candidate_holds_inputs(conn, txid_hex, *expiry_height, chain_tip_height)? {
+        for tracked in &evidence.tracked {
+            if !stop_candidate_holds_inputs(
+                conn,
+                &tracked.txid_hex,
+                tracked.expiry_height,
+                chain_tip_height,
+            )? {
                 return Err(CHANGED.to_string());
             }
         }

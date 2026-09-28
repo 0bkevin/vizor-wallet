@@ -2448,30 +2448,17 @@ async fn reconcile_migration_stop_candidates(
         }
     }
 
-    for (candidate, disposition) in decisions {
-        if disposition != MigrationStopDisposition::Tracked {
-            continue;
-        }
-        evidence
-            .tracked
-            .push((candidate.txid_hex.clone(), candidate.expiry_height));
-        match candidate.kind {
-            super::migration::MigrationStopCandidateKind::MigrationTransaction => {
-                super::migration::mark_pending_broadcasted(
-                    db_path,
-                    expected_run_id,
-                    &candidate.txid_hex,
-                )?;
-            }
-            super::migration::MigrationStopCandidateKind::DenominationStage => {
-                super::migration::mark_denomination_stage_broadcasted(
-                    &conn,
-                    expected_run_id,
-                    &candidate.txid_hex,
-                )?;
-            }
-        }
-    }
+    // abandon_run records these as broadcasted inside its own transaction,
+    // after rechecking them, so a failed attempt leaves them for the retry.
+    evidence.tracked = decisions
+        .into_iter()
+        .filter(|(_, disposition)| *disposition == MigrationStopDisposition::Tracked)
+        .map(|(candidate, _)| super::migration::TrackedStopTransaction {
+            kind: candidate.kind,
+            txid_hex: candidate.txid_hex,
+            expiry_height: candidate.expiry_height,
+        })
+        .collect();
     Ok(evidence)
 }
 

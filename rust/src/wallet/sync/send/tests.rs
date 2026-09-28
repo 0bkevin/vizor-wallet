@@ -1618,7 +1618,7 @@ fn stop_accepts_an_attempted_transaction_the_wallet_already_stores() {
     seed_chain_tip(&db_path, 100);
     let mut chain = FakeStopChain::default();
 
-    stop_with_native_attempts(
+    let evidence = stop_with_native_attempts(
         &mut chain,
         &db_path,
         &run_id,
@@ -1626,8 +1626,7 @@ fn stop_accepts_an_attempted_transaction_the_wallet_already_stores() {
     )
     .unwrap();
 
-    // Marked broadcasted with local bytes, so it is no longer a candidate.
-    assert!(!remaining_stop_candidate_txids(&db_path, &run_id).contains(&pending_txid));
+    assert_eq!(evidence.tracked, vec![tracked_pending(&pending_txid)]);
     assert!(chain.hash_requests.is_empty());
 }
 
@@ -1639,7 +1638,7 @@ fn stop_accepts_an_attempted_split_the_wallet_scanned_as_mined() {
     seed_local_mined_transaction(&db_path, &stage_txid, 95);
     let mut chain = FakeStopChain::default();
 
-    stop_with_native_attempts(
+    let evidence = stop_with_native_attempts(
         &mut chain,
         &db_path,
         &run_id,
@@ -1647,8 +1646,14 @@ fn stop_accepts_an_attempted_split_the_wallet_scanned_as_mined() {
     )
     .unwrap();
 
-    // The stage is marked broadcasted and leaves the pending stop set.
-    assert!(!remaining_stop_candidate_txids(&db_path, &run_id).contains(&stage_txid));
+    assert_eq!(
+        evidence.tracked,
+        vec![migration::TrackedStopTransaction {
+            kind: migration::MigrationStopCandidateKind::DenominationStage,
+            txid_hex: stage_txid,
+            expiry_height: 120,
+        }]
+    );
     assert!(chain.hash_requests.is_empty());
 }
 
@@ -1710,6 +1715,14 @@ fn stop_checks_the_current_chain_for_a_stored_transaction_past_its_expiry() {
     assert_eq!(current.hash_requests, vec![69_120]);
 }
 
+fn tracked_pending(txid_hex: &str) -> migration::TrackedStopTransaction {
+    migration::TrackedStopTransaction {
+        kind: migration::MigrationStopCandidateKind::MigrationTransaction,
+        txid_hex: txid_hex.to_string(),
+        expiry_height: 69_120,
+    }
+}
+
 fn abandon_with(
     db_path: &str,
     run_id: &str,
@@ -1739,7 +1752,16 @@ fn abandon_accepts_stop_evidence_that_still_holds() {
 
     abandon_with(&db_path, &run_id, &evidence).unwrap();
 
-    assert!(remaining_stop_candidate_txids(&db_path, &run_id).is_empty());
+    // Abandon keeps the tracked transaction's row as broadcasted.
+    let status: String = Connection::open(&db_path)
+        .unwrap()
+        .query_row(
+            "SELECT status FROM vizor_migration_pending_txs WHERE txid_hex = ?1",
+            params![pending_txid],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "broadcasted");
 }
 
 #[test]
@@ -1754,7 +1776,7 @@ fn abandon_rechecks_that_a_stored_transaction_is_still_unexpired() {
         std::slice::from_ref(&pending_txid),
     )
     .unwrap();
-    assert_eq!(evidence.tracked, vec![(pending_txid.clone(), 69_120)]);
+    assert_eq!(evidence.tracked, vec![tracked_pending(&pending_txid)]);
 
     // A sync moves the wallet's tip past the expiry before abandon runs, so
     // the wallet no longer holds the inputs.
@@ -1762,7 +1784,18 @@ fn abandon_rechecks_that_a_stored_transaction_is_still_unexpired() {
 
     let error = abandon_with(&db_path, &run_id, &evidence).unwrap_err();
     assert!(error.contains("chain changed"), "{error}");
-    assert!(remaining_stop_candidate_txids(&db_path, &run_id).contains(&"10".repeat(32)));
+
+    // The failed attempt left the transaction unmarked, so a retry must prove
+    // it again instead of skipping it.
+    assert!(remaining_stop_candidate_txids(&db_path, &run_id).contains(&pending_txid));
+    let error = stop_with_native_attempts(
+        &mut FakeStopChain::default(),
+        &db_path,
+        &run_id,
+        std::slice::from_ref(&pending_txid),
+    )
+    .unwrap_err();
+    assert!(error.contains("expires at block 69120"), "{error}");
 }
 
 #[test]
