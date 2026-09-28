@@ -18,7 +18,7 @@ use crate::wallet::{
 
 use super::{
     super::super::{SyncError, WalletDatabase},
-    super::{observability, transport::cancelable},
+    super::transport::cancelable,
 };
 
 /// Backfills fees for stored transactions whose status requests are dormant
@@ -34,11 +34,9 @@ pub(in crate::wallet::sync_engine::enhancement) async fn backfill_stored_fees(
             return Ok(());
         }
         let txid_str = format!("{txid}");
-        observability::record(|c| c.fee_backfill += 1);
         match db.get_transaction(txid) {
             Ok(Some(tx)) => {
                 if let Err(e) = fill_missing_fee(client, db_path, &tx, should_exit).await {
-                    observability::record(|c| c.fee_failed += 1);
                     log::warn!("sync: stored fee enhancement failed for {txid_str}: {e}");
                 }
             }
@@ -134,7 +132,6 @@ async fn fetch_transparent_prevout_values(
             continue;
         }
 
-        observability::record(|c| c.fee_prevout_fetches += 1);
         let parent_raw = match cancelable(
             get_transaction_payload(client, TxId::from_bytes(*outpoint.hash())),
             should_exit,

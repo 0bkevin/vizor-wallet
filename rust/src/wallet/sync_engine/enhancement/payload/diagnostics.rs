@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 const ROUTING_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Default)]
 pub(super) enum RecoveryPhase {
     #[default]
     Idle,
@@ -18,13 +18,6 @@ pub(super) enum RecoveryPhase {
 }
 
 impl RecoveryPhase {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            phase => phase.as_str(),
-        }
-    }
-
     fn as_str(self) -> &'static str {
         match self {
             Self::Idle => "",
@@ -65,14 +58,6 @@ pub(super) fn set_phase(wallet_db_path: &str, phase: RecoveryPhase) {
         .as_mut()
         .filter(|state| state.wallet_db_path == wallet_db_path)
     {
-        if state.phase != phase {
-            super::super::observability::enhance_log!(
-                info,
-                "payload phase {} -> {}",
-                state.phase.label(),
-                phase.label()
-            );
-        }
         state.phase = phase;
     }
 }

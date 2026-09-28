@@ -21,7 +21,7 @@ use crate::wallet::{
 };
 
 use crate::wallet::sync_engine::{
-    enhancement::{auxiliary::fees::fill_missing_fee, observability, transport::cancelable},
+    enhancement::{auxiliary::fees::fill_missing_fee, transport::cancelable},
     SyncError, WalletDatabase,
 };
 
@@ -59,23 +59,14 @@ impl PublicPayloadExecutor {
                 continue;
             }
             let txid_str = format!("{txid}");
-            observability::record(|c| c.public_requests += 1);
 
             match cancelable(get_transaction_payload(client, txid), should_exit).await {
                 Ok(raw) => match decode_enhancement_payload(&raw, txid) {
                     Ok((tx, mined_height)) => {
-                        let stored = with_wallet_db_write_lock(
+                        if let Err(e) = with_wallet_db_write_lock(
                             "sync_engine.enhance.decrypt_and_store_transaction",
                             || decrypt_and_store_transaction(&network, db, &tx, mined_height),
-                        );
-                        observability::record(|c| {
-                            if stored.is_ok() {
-                                c.public_stored += 1
-                            } else {
-                                c.public_failed += 1
-                            }
-                        });
-                        if let Err(e) = stored {
+                        ) {
                             log::error!("sync: decrypt_and_store_transaction failed: {e}");
                             self.failed.insert(txid);
                             self.deferred_error.get_or_insert_with(|| {
@@ -89,7 +80,6 @@ impl PublicPayloadExecutor {
                         }
                     }
                     Err(e) => {
-                        observability::record(|c| c.public_failed += 1);
                         log::warn!("sync: invalid enhancement payload for {txid_str}: {e}");
                         self.failed.insert(txid);
                         self.deferred_error.get_or_insert(e);
@@ -97,7 +87,6 @@ impl PublicPayloadExecutor {
                 },
                 Err(e) => match classify_get_transaction_error(&e) {
                     GetTransactionErrorAction::CompleteEnhancementNotFound => {
-                        observability::record(|c| c.public_not_found += 1);
                         log::warn!("sync: get_transaction did not recognize {txid_str}: {e}");
                         self.failed.insert(txid);
                         if let Err(e) = with_wallet_db_write_lock(
@@ -115,7 +104,6 @@ impl PublicPayloadExecutor {
                         }
                     }
                     GetTransactionErrorAction::RetryAsNetwork => {
-                        observability::record(|c| c.public_failed += 1);
                         self.failed.insert(txid);
                         self.deferred_error.get_or_insert_with(|| {
                             SyncError::net(format!("get_transaction failed for {txid_str}: {e}"))

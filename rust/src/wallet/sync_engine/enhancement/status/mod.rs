@@ -23,11 +23,8 @@ use zakura_transaction_status::{
     StatusSource,
 };
 use zcash_client_backend::data_api::{status::TransactionStatusWork, WalletRead};
-
-use super::observability;
 use zcash_primitives::transaction::TxId;
 
-pub(super) use private::status_endpoint;
 pub(crate) use private::PrivateStatusSource;
 pub(super) use public::lightwalletd_source;
 #[cfg(test)]
@@ -138,22 +135,9 @@ where
         }
         let txid = work.txid();
         attempted.insert(txid);
-        observability::record(|c| match work {
-            TransactionStatusWork::Private(_) => c.status_private += 1,
-            TransactionStatusWork::Public(_) => c.status_public += 1,
-        });
         let observation = match reader.observe(work, required_through).await {
-            Ok(observation) => {
-                observability::record(|c| match observation {
-                    StatusObservation::Mined(_) => c.status_mined += 1,
-                    StatusObservation::Mempool => c.status_mempool += 1,
-                    StatusObservation::Forked => c.status_forked += 1,
-                    StatusObservation::NotFound => c.status_not_found += 1,
-                });
-                observation.into()
-            }
+            Ok(observation) => observation.into(),
             Err(StatusError::CoverageIncomplete) if is_private(&work) => {
-                observability::record(|c| c.status_incomplete += 1);
                 // GetStatus work is expected to be highly unlikely in private
                 // mode. Temporarily fail visibly so this feedback gate detects
                 // real occurrences; if users encounter it, we will design the
@@ -165,7 +149,6 @@ where
             // The wallet's own database could not be read. That is not a
             // service outage, so it fails the sync rather than being deferred.
             Err(StatusError::LocalStorage) => {
-                observability::record(|c| c.status_failed += 1);
                 return Err(SyncError::db(
                     "transaction status: local wallet database read failed",
                 ));
@@ -173,19 +156,13 @@ where
             Err(error) if is_private(&work) => {
                 // Inconclusive: keep the work and stop querying the private
                 // service for this session. Never a public fallback.
-                observability::record(|c| c.status_failed += 1);
-                observability::enhance_log!(
-                    warn,
-                    "private status observation failed; deferring for this session error={error:?}"
+                log::warn!(
+                    "private status observation failed; deferring for this session: {error}"
                 );
                 *private_failed = true;
                 continue;
             }
-            Err(error) => {
-                observability::record(|c| c.status_failed += 1);
-                observability::enhance_log!(warn, "status observation failed error={error:?}");
-                return Err(SyncError::net(error.to_string()));
-            }
+            Err(error) => return Err(SyncError::net(error.to_string())),
         };
         if should_exit() {
             return Ok(actionable);
