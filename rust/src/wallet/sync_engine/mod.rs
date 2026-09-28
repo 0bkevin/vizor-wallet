@@ -49,8 +49,6 @@ mod address_history;
 mod block_source;
 mod claim_roots;
 mod enhance;
-mod gift_card_funding;
-pub(crate) use gift_card_funding::gift_card_funding_reason;
 mod error;
 pub(crate) mod ledger_discovery;
 mod lwd;
