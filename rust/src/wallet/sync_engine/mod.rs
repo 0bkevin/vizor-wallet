@@ -3634,6 +3634,48 @@ async fn run_sync_impl(
                     {
                         return Ok(());
                     }
+                    let released = enhancement.take_ready_resubmission();
+                    // This path completes without a post-batch pass, so a
+                    // transaction released by a final status observation is
+                    // broadcast now against the validated tip. If the chain
+                    // advanced, scan first: a new block may have mined it.
+                    let ranges = if !released.is_empty() {
+                        db.suggest_scan_ranges()
+                            .map_err(|e| SyncError::db(format!("suggest_scan_ranges: {e}")))?
+                    } else {
+                        Vec::new()
+                    };
+                    let outcome = resubmit_released_transactions(
+                        &released,
+                        allow_resubmit,
+                        &ranges,
+                        db_data_path,
+                        lightwalletd_url,
+                        &mut client,
+                        &mut db,
+                        current_tip_height,
+                        || {
+                            cancel.load(Ordering::Relaxed)
+                                || desired_mode.load(Ordering::SeqCst) != running_mode
+                        },
+                    )
+                    .await?;
+                    if let ReleasedResubmission::TipAdvanced(fresh_height) = outcome {
+                        current_tip_height = fresh_height;
+                        let promoted_ranges = db.suggest_scan_ranges().map_err(|e| {
+                            SyncError::db(format!("suggest_scan_ranges after tip promotion: {e}"))
+                        })?;
+                        reset_promoted_scan_progress(
+                            &promoted_ranges,
+                            &mut initial_total,
+                            &mut prev_remaining,
+                        );
+                        progress_display_mode = ProgressDisplayMode::Work;
+                        queued_ranges = Some(promoted_ranges);
+                        completion_tip_validation_required = true;
+                        continue;
+                    }
+
                     enhancement_after_scan = true;
                     ensure_complete_scan_state(&mut db, current_tip_height)?;
                     break;
@@ -4131,6 +4173,7 @@ async fn run_sync_impl(
             log::info!("[{}] sync: exiting during enhancement", elapsed());
             return Ok(());
         }
+        let ready = enhancement.take_ready_resubmission();
         enhancement_after_scan = true;
 
         // Post-batch tip reconciliation and auto-resubmit. The resubmit calls

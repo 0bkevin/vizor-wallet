@@ -215,6 +215,14 @@ private Status PIR          public lightwalletd
            set_transaction_status()
 ```
 
+For a previously mined outbound transaction awaiting status, a conclusive
+non-mined observation is held in the checkpoint's resubmission set while its
+status row stays pending. The sync caller completes that status work only after
+verifying an unchanged remote tip hash. Cancellation, an unverified tip, or an
+advanced tip retains the durable guard; an advanced tip schedules scanning
+before resubmission. This applies to both status sources. See
+[`docs/transaction-resubmission.md`](../../../../../docs/transaction-resubmission.md).
+
 The unselected source is lazy and is never opened. A selected private source
 does not fall back to public lightwalletd after initialization or observation
 failure.

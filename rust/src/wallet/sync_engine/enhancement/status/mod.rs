@@ -103,6 +103,8 @@ pub(super) async fn run_requests<P, R>(
     work: &[TransactionStatusWork],
     attempted: &mut HashSet<TxId>,
     private_failed: &mut bool,
+    db_path: &str,
+    ready: &mut HashSet<Vec<u8>>,
     should_exit: &impl Fn() -> bool,
 ) -> Result<bool, SyncError>
 where
@@ -188,7 +190,16 @@ where
         if should_exit() {
             return Ok(actionable);
         }
-        store::persist_work_observation(db, work, observation, required_through, decision_hash)?;
+        if store::persist_work_observation(
+            db,
+            db_path,
+            work,
+            observation,
+            required_through,
+            decision_hash,
+        )? {
+            ready.insert(txid.as_ref().to_vec());
+        }
     }
     Ok(actionable)
 }

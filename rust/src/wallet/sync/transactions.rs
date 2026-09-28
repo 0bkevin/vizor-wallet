@@ -2012,7 +2012,7 @@ pub(crate) fn get_resubmittable_txs_excluding(
 
 #[cfg(test)]
 #[path = "transactions/resubmission_tests.rs"]
-mod resubmission_tests;
+pub(super) mod resubmission_tests;
 
 #[cfg(test)]
 mod tests {

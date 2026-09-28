@@ -63,6 +63,7 @@ pub(super) struct EnhancementSession {
     /// Set by the first failed private status lookup; later checkpoints in this
     /// session leave private status work pending instead of retrying the service.
     private_status_failed: bool,
+    ready_resubmission: HashSet<Vec<u8>>,
 }
 
 impl EnhancementSession {
@@ -82,7 +83,12 @@ impl EnhancementSession {
             network,
             db_path: db_path.into(),
             private_status_failed: false,
+            ready_resubmission: HashSet::new(),
         }
+    }
+
+    pub(super) fn take_ready_resubmission(&mut self) -> HashSet<Vec<u8>> {
+        std::mem::take(&mut self.ready_resubmission)
     }
 
     /// Runs status and auxiliary metadata first, then drains the routed payload
@@ -94,6 +100,7 @@ impl EnhancementSession {
         cached: Option<&MemoryBlockSource>,
         should_exit: &(impl Fn() -> bool + Sync),
     ) -> Result<bool, SyncError> {
+        self.ready_resubmission.clear();
         self.policy.configure_db(db);
         let pass = observability::Pass::begin("checkpoint");
         let result = self.checkpoint(db, client, cached, should_exit).await;
@@ -132,6 +139,8 @@ impl EnhancementSession {
                 &status_work,
                 &mut attempted_statuses,
                 &mut self.private_status_failed,
+                &self.db_path,
+                &mut self.ready_resubmission,
                 should_exit,
             )
             .await?;

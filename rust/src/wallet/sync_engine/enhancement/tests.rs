@@ -13,10 +13,9 @@
 //!     the wallet imports or derives a new t-address and has to
 //!     backfill its activity).
 //!
-//! Librustzcash signals these gaps through two disjoint snapshots. Payload
-//! retrieval is exposed only by `transaction_enhancement_work()`, while status
-//! observation and transparent-address history come from
-//! `transaction_data_requests()`. The parent session services both snapshots in
+//! Librustzcash exposes payload retrieval through `transaction_enhancement_work()`,
+//! status through `transaction_status_work()`, and transparent-address history
+//! through `transaction_data_requests()`. The parent session services these snapshots in
 //! a fixed order and keeps their completion independent.
 
 use zcash_client_backend::data_api::status::{TransactionStatusMode, TransactionStatusRead};
@@ -663,6 +662,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn routed_recovery_status_retains_guard_until_verified_tip() {
+        use crate::wallet::sync_engine::{
+            complete_verified_recovery_statuses, RefreshedTipRelation,
+        };
+        use zakura_transaction_status::StatusObservation;
+        use zcash_client_backend::data_api::status::{
+            PublicTransactionStatusRequest, TransactionStatusWork,
+        };
+        for private in [false, true] {
+            for observation in [
+                StatusObservation::NotFound,
+                StatusObservation::Mempool,
+                StatusObservation::Forked,
+            ] {
+                let file = tempfile::NamedTempFile::new().unwrap();
+                let path = file.path().to_str().unwrap();
+                let txid = TxId::from_bytes([0x61; 32]);
+                crate::wallet::sync::populate_recovery_wallet(path, txid.as_ref(), &[1, 2, 3]);
+                let mut db =
+                    crate::wallet::sync::open_wallet_db(path, WalletNetwork::Test).unwrap();
+                db.update_chain_tip(BlockHeight::from_u32(900_000)).unwrap();
+                let conn = rusqlite::Connection::open(path).unwrap();
+                conn.execute("INSERT INTO blocks (height, hash, time, sapling_tree) VALUES (900000, ?1, 0, X'000000')", [[7u8; 32].as_slice()]).unwrap();
+                db.set_status_mode(if private {
+                    TransactionStatusMode::Private
+                } else {
+                    TransactionStatusMode::Public
+                });
+                let work = if private {
+                    db.transaction_status_work_for(txid).unwrap()
+                } else {
+                    TransactionStatusWork::Public(PublicTransactionStatusRequest::new(txid))
+                };
+                assert_eq!(matches!(work, TransactionStatusWork::Private(_)), private);
+                let mut reader = super::super::status::RoutedStatusReader::new(
+                    status_source(Ok(observation)),
+                    status_source(Ok(observation)),
+                );
+                let mut ready = std::collections::HashSet::new();
+                if private && matches!(observation, StatusObservation::NotFound) {
+                    conn.execute("DELETE FROM blocks WHERE height = 900000", [])
+                        .unwrap();
+                    super::super::status::run_requests(
+                        &mut reader,
+                        &mut db,
+                        &[work],
+                        &mut Default::default(),
+                        &mut false,
+                        path,
+                        &mut ready,
+                        &|| false,
+                    )
+                    .await
+                    .unwrap();
+                    assert!(
+                        ready.is_empty(),
+                        "private absence without a decision hash is inconclusive"
+                    );
+                    assert!(
+                        crate::wallet::sync::has_recovered_status_work(&conn, txid.as_ref())
+                            .unwrap()
+                    );
+                    conn.execute("INSERT INTO blocks (height, hash, time, sapling_tree) VALUES (900000, ?1, 0, X'000000')", [[7u8; 32].as_slice()]).unwrap();
+                }
+                super::super::status::run_requests(
+                    &mut reader,
+                    &mut db,
+                    &[work],
+                    &mut Default::default(),
+                    &mut false,
+                    path,
+                    &mut ready,
+                    &|| false,
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    ready,
+                    std::collections::HashSet::from([txid.as_ref().to_vec()])
+                );
+                assert!(
+                    crate::wallet::sync::has_recovered_status_work(&conn, txid.as_ref()).unwrap()
+                );
+                complete_verified_recovery_statuses(
+                    path,
+                    &ready,
+                    RefreshedTipRelation::UnchangedUnverified,
+                )
+                .unwrap();
+                assert!(
+                    crate::wallet::sync::has_recovered_status_work(&conn, txid.as_ref()).unwrap()
+                );
+                complete_verified_recovery_statuses(path, &ready, RefreshedTipRelation::Unchanged)
+                    .unwrap();
+                assert!(
+                    !crate::wallet::sync::has_recovered_status_work(&conn, txid.as_ref()).unwrap()
+                );
+                let payload: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM tx_retrieval_queue WHERE txid = ?1 AND query_type = 1)", [txid.as_ref()], |row| row.get(0)).unwrap();
+                assert!(payload);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn incomplete_private_status_trips_feedback_gate_without_public_fallback() {
         use zakura_transaction_status::{StatusError, StatusObservation};
         let (file, mut db, tx) =
@@ -689,6 +792,8 @@ mod tests {
                 &work,
                 &mut attempted,
                 &mut false,
+                file.path().to_str().unwrap(),
+                &mut std::collections::HashSet::new(),
                 &|| false
             )
             .await,
@@ -820,6 +925,8 @@ mod tests {
                     &work,
                     &mut std::collections::HashSet::new(),
                     &mut private_failed,
+                    _file.path().to_str().unwrap(),
+                    &mut std::collections::HashSet::new(),
                     &|| false,
                 )
                 .await
@@ -836,6 +943,8 @@ mod tests {
                 &work,
                 &mut std::collections::HashSet::new(),
                 &mut private_failed,
+                _file.path().to_str().unwrap(),
+                &mut std::collections::HashSet::new(),
                 &|| false,
             )
             .await
@@ -874,6 +983,8 @@ mod tests {
             &work,
             &mut std::collections::HashSet::new(),
             &mut private_failed,
+            _file.path().to_str().unwrap(),
+            &mut std::collections::HashSet::new(),
             &|| false,
         )
         .await;
@@ -913,6 +1024,8 @@ mod tests {
                 &work,
                 &mut std::collections::HashSet::new(),
                 &mut private_failed,
+                _file.path().to_str().unwrap(),
+                &mut std::collections::HashSet::new(),
                 &|| false,
             )
             .await,

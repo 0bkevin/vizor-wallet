@@ -101,14 +101,7 @@ impl Service {
 }
 
 fn public_params(rows: u64) -> Vec<u8> {
-    let params = parameters(rows).unwrap();
-    let (rlwe, _) = ipir_sp::params_for_simplepir_profile(
-        rows,
-        ITEM_SIZE_BITS,
-        ipir_sp::SimplePirProfile::P16Q48,
-    )
-    .unwrap();
-    vec![0; params.db_cols / rlwe.d * ipir_sp::modulus_switch::published_c1_len(rlwe.d, rlwe.q)]
+    vec![0; session_public_len(rows).unwrap()]
 }
 
 impl transport::Transport for Service {
@@ -158,17 +151,8 @@ impl transport::Transport for Service {
                 binding.generation, m.generation,
                 "query did not rebind to refreshed routing"
             );
-            let params = parameters(m.coverage.shards[0].logical_rows).unwrap();
             let mut response = binding.encode();
-            response.resize(
-                HEADER_BYTES
-                    + params.db_cols / params.poly_len
-                        * ipir_sp::modulus_switch::response_body_len(
-                            params.poly_len,
-                            params.q_prime_1,
-                        ),
-                0,
-            );
+            response.resize(response_len(m.coverage.shards[0].logical_rows).unwrap(), 0);
             response
         };
         let mut body = request.response_body();
