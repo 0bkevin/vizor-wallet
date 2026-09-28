@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../layout/app_form_factor.dart';
+import 'caps_lock_warning.dart';
 
 /// Disabled outside the production bootstrap (including Widgetbook/tests).
 final appPasswordInputSourceProvider = Provider<AppPasswordInputSource>((ref) {
@@ -195,7 +196,12 @@ class AppPasswordInputSource {
 
 /// Explicit opt-in around an app-password field, not part of PasswordTextField.
 class AppPasswordInput extends ConsumerStatefulWidget {
-  const AppPasswordInput({required this.child, super.key});
+  const AppPasswordInput({
+    required this.child,
+    this.warningOnDarkCard = false,
+    super.key,
+  });
+  final bool warningOnDarkCard;
   final Widget child;
   @override
   ConsumerState<AppPasswordInput> createState() => _AppPasswordInputState();
@@ -375,6 +381,9 @@ class _AppPasswordInputState extends ConsumerState<AppPasswordInput>
       _cancelRestore();
       return KeyEventResult.ignored;
     },
-    child: widget.child,
+    child: CapsLockWarningScope(
+      onDarkCard: widget.warningOnDarkCard,
+      child: widget.child,
+    ),
   );
 }
