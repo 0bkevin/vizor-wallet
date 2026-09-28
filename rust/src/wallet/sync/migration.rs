@@ -7573,9 +7573,13 @@ pub(crate) fn wallet_chain_tip(conn: &rusqlite::Connection) -> Result<Option<u32
 }
 
 /// Whether the wallet's records treat an attempted transaction's inputs as
-/// spent: it was scanned as mined, or it is stored and still unexpired at
-/// `chain_tip_height`. Past that tip the wallet releases a stored
-/// transaction's inputs. Zero is the legacy no-expiry sentinel.
+/// spent. The wallet must store the transaction's bytes: they record its
+/// expiry, which keeps the inputs spent even if a reorg later unmines it.
+/// A transaction known only from compact-block scanning has no recorded
+/// expiry, so after a reorg the wallet would release its inputs within the
+/// default expiry window, long before a ZIP 318 migration expires. A stored
+/// transaction holds its inputs while it is mined, or while it is unexpired
+/// at `chain_tip_height`. Zero is the legacy no-expiry sentinel.
 pub(crate) fn stop_evidence_holds_inputs(
     mined: bool,
     stored: bool,
@@ -7583,7 +7587,7 @@ pub(crate) fn stop_evidence_holds_inputs(
     chain_tip_height: Option<u32>,
 ) -> bool {
     let unexpired = expiry_height == 0 || chain_tip_height.is_some_and(|tip| expiry_height > tip);
-    mined || (stored && unexpired)
+    stored && (mined || unexpired)
 }
 
 /// [`stop_evidence_holds_inputs`] for one transaction's local records.

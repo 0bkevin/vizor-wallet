@@ -2417,8 +2417,8 @@ async fn reconcile_migration_stop_candidates(
             }
             MigrationStopDisposition::Block => {
                 return Err(format!(
-                    "Migration cannot stop until transaction {} is confirmed or expires at block {}. \
-                     A recently submitted transaction is recognized after the wallet syncs.",
+                    "Migration cannot stop until transaction {} is recorded locally or expires at block {}. \
+                     Vizor records a submitted transaction after the wallet syncs.",
                     candidate.txid_hex, candidate.expiry_height
                 ));
             }

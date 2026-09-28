@@ -254,8 +254,11 @@ fn migration_stop_discards_only_what_local_scanning_proves_dead() {
 fn stored_migration_transaction_holds_inputs_only_while_unexpired() {
     use migration::stop_evidence_holds_inputs as holds;
 
-    // A mined transaction holds its inputs whatever the expiry.
-    assert!(holds(true, false, 200, Some(500)));
+    // Scanning alone records no expiry, so it never holds the inputs.
+    assert!(!holds(true, false, 200, Some(100)));
+    assert!(!holds(true, false, 0, Some(100)));
+    // A stored, mined transaction holds them whatever the expiry.
+    assert!(holds(true, true, 200, Some(500)));
     // Stored bytes hold them only while the wallet counts it unexpired.
     assert!(holds(false, true, 200, Some(199)));
     assert!(holds(false, true, 0, Some(500)));
@@ -1523,7 +1526,8 @@ fn seed_local_transaction_bytes(db_path: &str, txid_hex: &str) {
     Connection::open(db_path)
         .unwrap()
         .execute(
-            "INSERT INTO transactions (txid, raw, min_observed_height) VALUES (?1, ?2, 100)",
+            "INSERT INTO transactions (txid, raw, expiry_height, min_observed_height)
+             VALUES (?1, ?2, 69120, 100)",
             params![hex::decode(txid_hex).unwrap(), vec![5u8, 6, 7, 8]],
         )
         .unwrap();
@@ -1604,7 +1608,7 @@ fn attempted_stop_candidate_without_local_evidence_blocks_without_network() {
 
     assert!(
         error.starts_with(&format!(
-            "Migration cannot stop until transaction {pending_txid} is confirmed or expires at block 69120."
+            "Migration cannot stop until transaction {pending_txid} is recorded locally or expires at block 69120."
         )),
         "{error}"
     );
@@ -1631,30 +1635,76 @@ fn stop_accepts_an_attempted_transaction_the_wallet_already_stores() {
 }
 
 #[test]
-fn stop_accepts_an_attempted_split_the_wallet_scanned_as_mined() {
+fn stop_blocks_on_a_split_known_only_from_scanning() {
     let (_temp_dir, db_path, run_id, _) = stop_candidate_test_run();
     let stage_txid = "10".repeat(32);
-    assert!(remaining_stop_candidate_txids(&db_path, &run_id).contains(&stage_txid));
     seed_local_mined_transaction(&db_path, &stage_txid, 95);
+    seed_chain_tip(&db_path, 100);
     let mut chain = FakeStopChain::default();
 
-    let evidence = stop_with_native_attempts(
+    // Scanning records no expiry, so a reorg that unmines it would release the
+    // inputs long before the transaction expires.
+    let error = stop_with_native_attempts(
         &mut chain,
         &db_path,
         &run_id,
         std::slice::from_ref(&stage_txid),
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(
-        evidence.tracked,
-        vec![migration::TrackedStopTransaction {
-            kind: migration::MigrationStopCandidateKind::DenominationStage,
-            txid_hex: stage_txid,
-            expiry_height: 120,
-        }]
+    assert!(
+        error.contains("recorded locally or expires at block 120"),
+        "{error}"
     );
+    assert!(remaining_stop_candidate_txids(&db_path, &run_id).contains(&stage_txid));
     assert!(chain.hash_requests.is_empty());
+}
+
+#[test]
+fn stored_stop_transaction_holds_inputs_through_its_expiry_after_a_reorg() {
+    let (_temp_dir, db_path, run_id, pending_txid) = stop_candidate_test_run();
+    seed_block(&Connection::open(&db_path).unwrap(), 101);
+    Connection::open(&db_path)
+        .unwrap()
+        .execute(
+            "INSERT INTO transactions (txid, raw, block, mined_height, expiry_height, min_observed_height)
+             VALUES (?1, X'05060708', 101, 101, 69120, 100)",
+            params![hex::decode(&pending_txid).unwrap()],
+        )
+        .unwrap();
+    seed_chain_tip(&db_path, 110);
+    let evidence = stop_with_native_attempts(
+        &mut FakeStopChain::default(),
+        &db_path,
+        &run_id,
+        std::slice::from_ref(&pending_txid),
+    )
+    .unwrap();
+    assert_eq!(evidence.tracked, vec![tracked_pending(&pending_txid)]);
+
+    // A reorg unmines it, and the tip moves past the default expiry window
+    // counted from its first sighting, but not past its own expiry.
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute(
+        "UPDATE transactions SET block = NULL, mined_height = NULL WHERE txid = ?1",
+        params![hex::decode(&pending_txid).unwrap()],
+    )
+    .unwrap();
+    seed_chain_tip(&db_path, 100 + 41);
+
+    // The wallet keeps its actual expiry, so its inputs stay spent.
+    let expiry: Option<u32> = conn
+        .query_row(
+            "SELECT expiry_height FROM transactions WHERE txid = ?1",
+            params![hex::decode(&pending_txid).unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(expiry, Some(69_120));
+    assert!(
+        migration::stop_candidate_holds_inputs(&conn, &pending_txid, 69_120, Some(141)).unwrap()
+    );
+    abandon_with(&db_path, &run_id, &evidence).unwrap();
 }
 
 #[test]
