@@ -2393,17 +2393,20 @@ async fn reconcile_migration_stop_candidates(
     // state answers the only question stop has, which is whether abandoning
     // may release an attempted transaction's inputs. See
     // `classify_migration_stop_candidate`.
-    let fully_scanned = wallet_fully_scanned_block(db_path, network)?;
+    let local_chain = local_wallet_chain(db_path, network)?;
+    let fully_scanned = local_chain.fully_scanned;
     let conn = open_wallet_raw_conn_with_timeout(db_path, READ_DB_BUSY_TIMEOUT)?;
     let mut decisions = Vec::with_capacity(attempted_candidates.len());
     for candidate in attempted_candidates {
-        let tracked = super::migration::local_transaction_raw(&conn, &candidate.txid_hex)?
-            .is_some()
-            || super::migration::local_denomination_chain_identity(&conn, &candidate.txid_hex)?
-                .is_some();
+        let evidence = LocalStopEvidence {
+            mined: super::migration::local_denomination_chain_identity(&conn, &candidate.txid_hex)?
+                .is_some(),
+            stored: super::migration::local_transaction_raw(&conn, &candidate.txid_hex)?.is_some(),
+        };
         match classify_migration_stop_candidate(
-            tracked,
+            evidence,
             candidate.expiry_height,
+            local_chain.tip_height,
             fully_scanned.map(|(height, _)| height),
         ) {
             MigrationStopDisposition::Block if candidate.expiry_height == 0 => {
@@ -2522,32 +2525,47 @@ impl MigrationStopChain for LightwalletdStopChain<'_> {
 /// when the user stops its run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MigrationStopDisposition {
-    /// The wallet stores the transaction's bytes or its mined block. The
-    /// wallet treats its inputs as spent until it is mined or expires, so
-    /// abandoning the run cannot release them early.
+    /// The wallet already treats the transaction's inputs as spent: it scanned
+    /// the transaction as mined, or stores it and still counts it unexpired.
+    /// Abandoning the run cannot release those inputs early.
     Tracked,
-    /// The wallet has fully scanned through the expiry height without seeing
-    /// the transaction, so it can never be mined. This holds only if the
-    /// scanned blocks are still on the current chain, which the caller checks.
+    /// No local tracking holds the inputs, and the wallet has fully scanned
+    /// through the expiry height without seeing the transaction, so it can
+    /// never be mined. This holds only if the scanned blocks are still on the
+    /// current chain, which the caller checks.
     Discard,
     /// Neither holds. The transaction may still be accepted and mined, so its
     /// inputs must stay locked.
     Block,
 }
 
+/// Local records of one attempted migration transaction.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct LocalStopEvidence {
+    /// The wallet scanned the transaction in a block.
+    mined: bool,
+    /// The wallet stores the transaction's bytes.
+    stored: bool,
+}
+
 /// Decides a stop candidate from local evidence only.
 ///
-/// Migration and denomination-split transactions spend wallet Orchard notes.
-/// If one is mined, compact-block scanning matches its nullifiers, so a
-/// wallet that has fully scanned through `expiry_height` would already track
-/// it. After that height it can no longer be mined. Zero is the legacy
-/// no-expiry sentinel and never proves this.
+/// Stored bytes hold the inputs only while the transaction is unexpired at
+/// `chain_tip_height`, the wallet's own tip: past it, the wallet releases
+/// them. Otherwise only proof of absence may release them. Migration and
+/// denomination-split transactions spend wallet Orchard notes. If one is
+/// mined, compact-block scanning matches its nullifiers, so a wallet that has
+/// fully scanned through `expiry_height` would already have seen it. After
+/// that height it can no longer be mined. Zero is the legacy no-expiry
+/// sentinel and never proves this.
 fn classify_migration_stop_candidate(
-    tracked: bool,
+    evidence: LocalStopEvidence,
     expiry_height: u32,
+    chain_tip_height: Option<u32>,
     fully_scanned_height: Option<u32>,
 ) -> MigrationStopDisposition {
-    if tracked {
+    let unexpired = expiry_height == 0 || chain_tip_height.is_some_and(|tip| expiry_height > tip);
+    if evidence.mined || (evidence.stored && unexpired) {
         MigrationStopDisposition::Tracked
     } else if expiry_height > 0
         && fully_scanned_height.is_some_and(|scanned| scanned >= expiry_height)
@@ -2558,18 +2576,28 @@ fn classify_migration_stop_candidate(
     }
 }
 
-/// The last block of the contiguous scanned range that starts at the wallet
-/// birthday, or `None` when no such range exists.
-fn wallet_fully_scanned_block(
-    db_path: &str,
-    network: WalletNetwork,
-) -> Result<Option<(u32, BlockHash)>, String> {
+/// The wallet's view of the chain, which stop judges local evidence against.
+struct LocalWalletChain {
+    /// The chain tip the wallet uses for expiry.
+    tip_height: Option<u32>,
+    /// The last block of the contiguous scanned range that starts at the
+    /// wallet birthday.
+    fully_scanned: Option<(u32, BlockHash)>,
+}
+
+fn local_wallet_chain(db_path: &str, network: WalletNetwork) -> Result<LocalWalletChain, String> {
     use zcash_client_backend::data_api::WalletRead;
     let db = super::open_wallet_db_for_read(db_path, network)?;
-    Ok(db
-        .block_fully_scanned()
-        .map_err(|e| format!("Read fully scanned height before migration stop: {e}"))?
-        .map(|block| (u32::from(block.block_height()), block.block_hash())))
+    Ok(LocalWalletChain {
+        tip_height: db
+            .chain_height()
+            .map_err(|e| format!("Read wallet chain tip before migration stop: {e}"))?
+            .map(u32::from),
+        fully_scanned: db
+            .block_fully_scanned()
+            .map_err(|e| format!("Read fully scanned height before migration stop: {e}"))?
+            .map(|block| (u32::from(block.block_height()), block.block_hash())),
+    })
 }
 
 /// `chain_tip_height` is `None` when no legacy row needs it. A legacy row
