@@ -7,21 +7,21 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-zakura-pir-status = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
-zakura-transaction-status = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
+zakura-pir-status = { version = "=0.0.1-rc0" }
+zakura-transaction-status = { version = "=0.0.1-rc0" }
 zcash_note_encryption = "0.4"
 flutter_rust_bridge = "=2.11.1"
 
 zcash_script = "0.4.3"
-voting-crypto-deps = { version = "=0.2.3" }
-sapling-crypto = { package = "zakura-sapling-crypto", version = "=1.2.0", default-features = false, features = ["circuit"] }
+voting-crypto-deps = { version = "=0.2.4" }
+sapling-crypto = { package = "zakura-sapling-crypto", version = "=2.0.0", default-features = false, features = ["circuit"] }
 uuid = "1.1"
 zip32 = "0.2"
-pasta_curves = { package = "zakura-pasta-curves", version = "=1.2.0" }
+pasta_curves = { package = "zakura-pasta-curves", version = "=2.0.0" }
 ff = "0.14"
 # Required by no-op Sapling prover trait impls
-jubjub = { package = "zakura-jubjub", version = "=1.2.0" }
-bls12_381 = { package = "zakura-bls12-381", version = "=1.2.0" }
+jubjub = { package = "zakura-jubjub", version = "=2.0.0" }
+bls12_381 = { package = "zakura-bls12-381", version = "=2.0.0" }
 rand_core = "0.6"
 secp256k1 = "0.29"
 
@@ -89,22 +89,24 @@ tendermint-light-client-verifier = "0.40.4"
 # `use orchard` / `use zcash_client_backend` keep working.
 [dependencies.zcash_primitives]
 package = "zakura-primitives"
-version = "=1.2.0"
+version = "=2.0.0"
 
 [dependencies.zcash_address]
-version = "0.13.0"
+package = "zakura-address"
+version = "=2.0.0"
 
 [dependencies.zcash_keys]
 package = "zakura-keys"
-version = "=1.2.0"
+version = "=2.0.0"
 features = ["orchard"]
 
 [dependencies.zcash_protocol]
-version = "0.10.4"
+package = "zakura-protocol"
+version = "=2.0.0"
 
 [dependencies.transparent]
-package = "zcash_transparent"
-version = "0.10.0"
+package = "zakura-transparent"
+version = "=2.0.0"
 
 [dependencies.zcash_client_backend]
 package = "zakura-client-backend"
@@ -125,20 +127,20 @@ version = "=0.1.0-rc7"
 features = ["orchard", "transparent-inputs", "unstable", "serde"]
 
 [dependencies.zcash_voting]
-version = "=5.1.1-rc.1"
+version = "=5.1.1-rc.3"
 
 [dependencies.orchard]
 package = "zakura-orchard"
-version = "=1.2.0"
+version = "=2.0.0"
 
 [dependencies.zcash_proofs]
 package = "zakura-proofs"
-version = "=1.2.0"
+version = "=2.0.0"
 features = ["local-prover"]
 
 [dependencies.pczt]
 package = "zakura-pczt"
-version = "=0.1.0-rc3"
+version = "=0.1.0-rc4"
 features = [
     "orchard",
     "io-finalizer",
@@ -185,14 +187,14 @@ anyhow = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "time"] }
 
 [dev-dependencies.zcash_voting]
-version = "=5.1.1-rc.1"
+version = "=5.1.1-rc.3"
 features = ["test-fixtures"]
 
 [dev-dependencies.ipir-sp]
 version = "=0.1.0-rc.6"
 
 [dev-dependencies.vote-commitment-tree]
-version = "=0.6.2"
+version = "=0.6.3"
 default-features = false
 features = ["zakura"]
 
@@ -222,12 +224,3 @@ opt-level = 3
 
 [profile.dev.package."*"]
 opt-level = 3
-
-# Pin the routed status and enhancement work APIs from wallet-libraries.
-# Keep the related SDK crates on one revision to preserve shared Rust types.
-[patch.crates-io]
-zakura-client-backend = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
-zakura-client-sqlite = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
-zakura-pczt = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
-zakura-pir-enhance = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
-zakura-pir-enhance-types = { git = "https://github.com/zakura-core/wallet-libraries.git", rev = "2e206f7894589445d10e6741d91a95973f12b982" }
