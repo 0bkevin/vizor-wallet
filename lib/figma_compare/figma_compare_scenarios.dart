@@ -758,6 +758,16 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     builder: buildReceivedReceiptKnownSenderUseCase,
   ),
   FigmaCompareScenario(
+    id: 'activity-received-detail-shielded',
+    description: 'Desktop memo-less shielded received transaction receipt',
+    builder: buildReceivedReceiptShieldedToShieldedUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'activity-received-detail-in-progress',
+    description: 'Desktop unconfirmed received transaction receipt',
+    builder: buildReceivedReceiptInProgressUseCase,
+  ),
+  FigmaCompareScenario(
     id: 'activity-gift-card-redeemed-detail',
     description: 'Desktop redeemed Gift Card activity detail',
     builder: buildRedeemedGiftCardActivityDetailUseCase,
