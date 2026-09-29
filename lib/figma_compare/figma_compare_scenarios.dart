@@ -14,6 +14,7 @@ import '../widgetbook/ledger_use_cases.dart';
 import '../src/features/onboarding/ledger/ledger_connect_screen.dart';
 
 import '../widgetbook/activity_use_cases.dart';
+import '../widgetbook/received_receipt_use_cases.dart';
 import '../widgetbook/keystone_use_cases.dart';
 import '../widgetbook/payment_link_claim_outcome_use_cases.dart';
 import '../widgetbook/home_use_cases.dart';
@@ -750,6 +751,11 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     id: 'activity-gift-card-created-detail',
     description: 'Desktop created Gift Card activity detail',
     builder: buildCreatedGiftCardActivityDetailUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'activity-received-detail',
+    description: 'Desktop received transaction receipt from a saved contact',
+    builder: buildReceivedReceiptKnownSenderUseCase,
   ),
   FigmaCompareScenario(
     id: 'activity-gift-card-redeemed-detail',

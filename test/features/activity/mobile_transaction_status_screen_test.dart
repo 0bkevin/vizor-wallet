@@ -276,7 +276,7 @@ void main() {
     },
   );
 
-  testWidgets('redeemed receipt refreshes when only the network fee arrives', (
+  testWidgets('redeemed receipt shows no fee before or after the fee arrives', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(393, 1000));
@@ -303,7 +303,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('--'), findsOneWidget);
+    expect(find.text('Tx fee'), findsNothing);
     final enriched = _tx(kind: 'received', fee: BigInt.from(15000));
     history[0] = enriched;
     notifier.setSyncState(
@@ -314,12 +314,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('0.00015 ZEC'), findsOneWidget);
-    expect(find.text('--'), findsNothing);
+    expect(find.text('Tx fee'), findsNothing);
+    expect(find.text('0.00015 ZEC'), findsNothing);
   });
 
   for (final fee in [0, 15000]) {
-    testWidgets('redeemed card keeps the fee row with fee $fee', (
+    testWidgets('redeemed card shows no fee row with fee $fee', (
       tester,
     ) async {
       await tester.binding.setSurfaceSize(const Size(393, 1000));
@@ -332,9 +332,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Redeemed a gift card'), findsOneWidget);
-      expect(find.text('Tx fee'), findsOneWidget);
+      // Redeeming a card is a receive, so it shows no network fee.
+      expect(find.text('Tx fee'), findsNothing);
       expect(find.text('Card fee'), findsNothing);
-      expect(find.text(fee == 0 ? '--' : '0.00015 ZEC'), findsOneWidget);
+      expect(find.text('0.00015 ZEC'), findsNothing);
       // The sender's reserve must not be substituted or added here.
       expect(find.text('0.0002 ZEC'), findsNothing);
       expect(find.text('0.00035 ZEC'), findsNothing);
