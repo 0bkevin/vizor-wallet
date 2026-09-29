@@ -110,6 +110,15 @@ addresses with no mined output, including those funded only by a first leg that
 never mined, are not queried. Debug builds treat scheduled checks as due
 when `ZCASH_E2E_EPHEMERAL_CHECKS_DUE_NOW` is set; the TEX send E2E uses this.
 
+The backend reserves the next ephemeral address whenever a TEX pair is built
+and never returns it. It reserves at most ten past the last address a mined
+transaction used, so ten cancelled hardware approvals in a row would block TEX
+sends from the account. `proposal_locks` therefore records the address a
+hardware TEX request reserved and returns it when the request is released before
+its outbox checkpoint or first broadcast. After that boundary the address may be
+known to the network and stays reserved. A reservation that did reach the
+network but was never mined still counts toward the ten.
+
 ## Limits
 
 This searches addresses already generated within the wallet's supported gap

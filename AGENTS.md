@@ -701,6 +701,10 @@ or the first broadcast attempt. Wallet-owned PCZTs carry the reservation owner;
 strip that metadata from device signer views. Ledger checkpoint insertion and
 reservation transfer must commit in the same SQLite transaction. Keystone marks
 retention before the first network submission, including TEX's first round.
+A hardware TEX request's ZIP 320 ephemeral address follows the same boundary:
+releasing the request before that boundary returns the address, so cancelled
+approvals cannot exhaust the ephemeral gap limit; after it the address stays
+reserved.
 Normal app exit closes the proposal gate, requests sync cancellation, and hides
 its desktop window before awaiting reservation cleanup. Rust allows 250ms to
 acquire the wallet write lock and drain accepted DB creators, then releases only

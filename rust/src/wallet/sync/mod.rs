@@ -738,7 +738,7 @@ fn unlock_stored_proposal_locked(
         current.owner,
     )
     .map_err(|e| format!("Unlock abandoned send proposal inputs: {e}"))?;
-    proposal_locks::remove_with_timeout(&current.db_path, current.owner, metadata_timeout)?;
+    proposal_locks::release_with_timeout(&current.db_path, current.owner, metadata_timeout)?;
     store.locks.remove(&proposal_id);
     Ok(())
 }
