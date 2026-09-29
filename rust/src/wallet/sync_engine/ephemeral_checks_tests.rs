@@ -293,3 +293,39 @@ async fn a_failing_address_is_deferred_behind_the_others() {
     assert!(w.request_at(&a).unwrap() > now, "failed address deferred");
     assert!(w.request_at(&b).unwrap() <= now, "next address stays due");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn exit_abandons_a_stalled_fetch_and_keeps_the_address_due() {
+    let mut w = wallet();
+    let used = w.ephemeral[0];
+    w.use_address(used, 1);
+    let now = SystemTime::now();
+    w.set_check_time(&used, now - Duration::from_secs(60));
+
+    // Exit is requested once the fetch has started.
+    let polls = Cell::new(0);
+    let should_exit = || {
+        polls.set(polls.get() + 1);
+        polls.get() > 1
+    };
+    let path = w.path.clone();
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        ephemeral_checks::run_with(
+            &mut w.db,
+            &path,
+            w.network,
+            BlockHeight::from_u32(TIP),
+            now,
+            &should_exit,
+            |_, _, _| std::future::pending::<Result<Vec<RawTransaction>, SyncError>>(),
+        ),
+    )
+    .await
+    .expect("exit must not wait for the fetch");
+    assert!(!result.unwrap());
+    assert!(
+        w.request_at(&used).unwrap() <= now,
+        "stays due for the next sync"
+    );
+}

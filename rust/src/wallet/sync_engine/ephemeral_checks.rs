@@ -101,7 +101,13 @@ where
     let address = encode_transparent_address_p(&network, &request.address());
     let start = u64::from(u32::from(request.block_range_start()));
     let end = u64::from(u32::from(tip));
-    let txs = match fetch(address, start, end).await {
+    // Drop the fetch on exit; a lock or reset must not wait for the stream.
+    let fetched = tokio::select! {
+        biased;
+        _ = super::watch_for_exit(should_exit) => return Ok(false),
+        fetched = fetch(address, start, end) => fetched,
+    };
+    let txs = match fetched {
         Ok(txs) => txs,
         Err(error) => {
             // Defer this address so a persistent failure cannot starve the others.
