@@ -61,13 +61,13 @@ use enhancement::{queue_stored_transactions, EnhancementPolicy, EnhancementSessi
 pub(crate) use error::SyncError;
 use error::{RecoveryStrategy, MAX_REWINDS_PER_RUN};
 use lwd::{
-    download_blocks, download_subtree_roots, get_address_utxos_stream, get_compact_block_hash,
-    get_tree_state, get_tree_state_for_block,
+    download_blocks, download_subtree_roots, get_address_utxos_stream, get_tree_state,
+    get_tree_state_for_block,
 };
 pub(crate) use lwd::{
-    get_latest_block, get_taddress_txids, next_stream_message, open_background_direct_lwd_channel,
-    open_isolated_lwd_channel, open_lwd_channel, open_lwd_channel_with_cancel, send_transaction,
-    send_transaction_with_status,
+    get_compact_block_hash, get_latest_block, get_taddress_txids, next_stream_message,
+    open_background_direct_lwd_channel, open_isolated_lwd_channel, open_lwd_channel,
+    open_lwd_channel_with_cancel, send_transaction, send_transaction_with_status,
 };
 pub(crate) use tip_cache::{
     get_latest_block_recorded, latest_block_for_transaction,

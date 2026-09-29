@@ -410,11 +410,6 @@ class _ActivityTransactionStatusScreenState
             ? null
             : _unknownFromKindForSourcePool(fromPool),
         isShieldedSource: fromPool == 'shielded',
-        // Received receipts still show the transaction-level network fee.
-        // The sender paid it, so the row is labeled separately from send fees.
-        feeText: tx.fee > BigInt.zero
-            ? _feeText(tx, privacyModeEnabled: privacyModeEnabled)
-            : null,
         receivingAddress: receivingAddress,
         isShieldedReceivingAddress: receivingIsShielded,
         memoText: memo,
@@ -591,11 +586,14 @@ class _ActivityTransactionStatusScreenState
           : null,
       timestampText: _timestampText(tx, override: giftCard.activityTimestamp),
       txIdText: _truncatedDisplayTxid(tx.txidHex),
-      feeText: _feeText(
-        tx,
-        privacyModeEnabled: privacyModeEnabled,
-        giftCard: giftCard,
-      ),
+      // Redeeming a card is a receive, so it shows no network fee.
+      feeText: giftCard.kind == GiftCardActivityKind.redeemed
+          ? null
+          : _feeText(
+              tx,
+              privacyModeEnabled: privacyModeEnabled,
+              giftCard: giftCard,
+            ),
       onTxIdPressed: () => unawaited(_openTransactionExplorer()),
     );
   }

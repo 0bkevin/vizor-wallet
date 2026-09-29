@@ -753,8 +753,12 @@ class _MobileTransactionStatusScreenState
     required bool privacyModeEnabled,
     GiftCardActivityMetadata? giftCard,
   }) {
-    if (tx == null || tx.fee <= BigInt.zero) {
-      return giftCard?.kind == GiftCardActivityKind.redeemed ? '--' : null;
+    // Receives, including redeemed cards, show no network fee.
+    if (tx == null ||
+        tx.fee <= BigInt.zero ||
+        tx.txKind == 'received' ||
+        tx.txKind == 'receiving') {
+      return null;
     }
     final fee = giftCard == null ? tx.fee : giftCard.detailFeeZatoshi(tx.fee);
     if (privacyModeEnabled) {
