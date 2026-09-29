@@ -31,6 +31,7 @@ import '../../payment_links/providers/payment_link_cards_provider.dart';
 import '../../donation/donation_config.dart';
 import '../settings_platform.dart';
 import '../widgets/network_privacy_control.dart';
+import '../widgets/enhance_pir_privacy_control.dart';
 import '../widgets/settings_new_badge.dart';
 import '../widgets/windows_update_download_flow.dart';
 
@@ -604,7 +605,7 @@ class _SettingsList extends ConsumerWidget {
             ),
             if (enhancePirAvailable) ...[
               const SizedBox(height: AppSpacing.sm),
-              _EnhancePirPrivacyControl(
+              EnhancePirPrivacyControl(
                 enabled: enhancePirEnabled,
                 transition: recoveryTransition,
                 onToggle: changingRecovery
@@ -1065,111 +1066,6 @@ class _ThemeOptionIndicator extends StatelessWidget {
               ),
             )
           : null,
-    );
-  }
-}
-
-class _EnhancePirPrivacyControl extends StatelessWidget {
-  const _EnhancePirPrivacyControl({
-    required this.enabled,
-    required this.onToggle,
-    required this.transition,
-  });
-
-  final bool enabled;
-  final VoidCallback? onToggle;
-
-  /// Feedback for the user's own toggle only. Recovery queue counts are
-  /// deliberately not surfaced here: they are dominated by obligations that
-  /// can never complete (dummy actions, outputs the wallet cannot open), so
-  /// they read as failures the user is expected to act on.
-  final String? transition;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          height: 44,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
-            child: Row(
-              children: [
-                SizedBox.square(
-                  dimension: 20,
-                  child: Center(
-                    child: AppIcon(
-                      AppIcons.eye,
-                      size: 20,
-                      color: enabled
-                          ? colors.icon.brandCrimson
-                          : colors.icon.muted,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.xs),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        'Private queries',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTypography.labelLarge.copyWith(
-                          color: colors.text.accent,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.xxs),
-                      Text(
-                        enabled ? 'On' : 'Off',
-                        key: const ValueKey('settings_enhance_pir_status'),
-                        style: AppTypography.labelLarge.copyWith(
-                          color: enabled
-                              ? colors.text.brandCrimson
-                              : colors.text.secondary,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.xs),
-                PrivacyToggle(
-                  key: const ValueKey('settings_enhance_pir_toggle'),
-                  trackKey: const ValueKey('settings_enhance_pir_toggle_track'),
-                  enabled: enabled,
-                  semanticsLabel: 'Private queries',
-                  onToggle: onToggle,
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (transition != null) ...[
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            transition!,
-            key: const ValueKey('settings_enhance_pir_transition'),
-            style: AppTypography.bodyMedium.copyWith(
-              color: colors.text.secondary,
-            ),
-          ),
-        ],
-        const SizedBox(height: AppSpacing.xs),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
-          child: Text(
-            'Experimental. Queries and enhances transaction data without revealing their IDs to servers.',
-            style: AppTypography.bodyMedium.copyWith(
-              color: colors.text.secondary,
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

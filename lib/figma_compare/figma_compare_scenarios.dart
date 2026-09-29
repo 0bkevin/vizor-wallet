@@ -1264,8 +1264,19 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
   ),
   FigmaCompareScenario(
     id: 'welcome-network-settings',
-    description: 'Desktop first-wallet network settings with Tor control',
+    description:
+        'Desktop first-wallet network settings with Tor and private queries',
     builder: buildWelcomeNetworkSettingsUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'welcome-private-queries-enabled',
+    description: 'Desktop onboarding with private queries enabled',
+    builder: buildWelcomePrivateQueriesEnabledUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'welcome-private-queries-changing',
+    description: 'Desktop onboarding while private queries are being saved',
+    builder: buildWelcomePrivateQueriesChangingUseCase,
   ),
   FigmaCompareScenario(
     id: 'welcome-network-settings-tor-connected',

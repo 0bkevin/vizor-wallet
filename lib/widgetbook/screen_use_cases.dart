@@ -186,12 +186,22 @@ Widget buildWelcomeNetworkSettingsTorConnectedUseCase(BuildContext context) {
 }
 
 Widget _buildWelcomeNetworkSettingsUseCase(
-  NetworkPrivacyState networkPrivacyState,
-) {
+  NetworkPrivacyState networkPrivacyState, {
+  bool recoveryChanging = false,
+  bool recoveryEnabled = false,
+}) {
   return ProviderScope(
     overrides: [
       appBootstrapProvider.overrideWithValue(AppBootstrapState.empty),
       appLayoutProvider.overrideWith(_NoOpLayoutNotifier.new),
+      enhancePirAvailableProvider.overrideWithValue(true),
+      enhancePirProvider.overrideWith(
+        () => _PreviewWelcomePrivacy(recoveryEnabled),
+      ),
+      if (recoveryChanging)
+        enhancePirTransitionProvider.overrideWith(
+          _PreviewEnhancePirChanging.new,
+        ),
       networkPrivacyProvider.overrideWith(
         () => _PreviewNetworkPrivacyNotifier(networkPrivacyState),
       ),
@@ -5466,4 +5476,24 @@ class _PreviewEnhancePirEnabled extends EnhancePirNotifier {
 class _PreviewEnhancePirChanging extends EnhancePirTransitionNotifier {
   @override
   String? build() => 'Changing setting…';
+}
+
+Widget buildWelcomePrivateQueriesEnabledUseCase(BuildContext context) =>
+    _buildWelcomeNetworkSettingsUseCase(
+      const NetworkPrivacyState.off(),
+      recoveryEnabled: true,
+    );
+Widget buildWelcomePrivateQueriesChangingUseCase(BuildContext context) =>
+    _buildWelcomeNetworkSettingsUseCase(
+      const NetworkPrivacyState.off(),
+      recoveryChanging: true,
+    );
+
+class _PreviewWelcomePrivacy extends EnhancePirNotifier {
+  _PreviewWelcomePrivacy(this.enabled);
+  final bool enabled;
+  @override
+  bool build() => enabled;
+  @override
+  Future<void> set(bool enabled) async => state = enabled;
 }

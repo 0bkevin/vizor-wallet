@@ -125,6 +125,14 @@ class WidgetbookApp extends StatelessWidget {
                       name: 'Network settings - Tor connected',
                       builder: buildWelcomeNetworkSettingsTorConnectedUseCase,
                     ),
+                    WidgetbookUseCase(
+                      name: 'Network settings - Private queries enabled',
+                      builder: buildWelcomePrivateQueriesEnabledUseCase,
+                    ),
+                    WidgetbookUseCase(
+                      name: 'Network settings - Private queries changing',
+                      builder: buildWelcomePrivateQueriesChangingUseCase,
+                    ),
                   ],
                 ),
                 WidgetbookComponent(
