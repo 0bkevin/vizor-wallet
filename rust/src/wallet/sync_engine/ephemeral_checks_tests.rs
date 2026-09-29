@@ -28,6 +28,10 @@ fn legacy_transaction(prevout: OutPoint, recipient: TransparentAddress, value: u
     Transaction::read(&bytes[..], BranchId::Sprout).unwrap()
 }
 
+fn history(txs: Vec<RawTransaction>) -> ephemeral_checks::History {
+    futures::stream::iter(txs.into_iter().map(Ok)).boxed()
+}
+
 fn raw(tx: &Transaction, height: u32) -> RawTransaction {
     let mut data = Vec::new();
     tx.write(&mut data).unwrap();
@@ -148,7 +152,7 @@ impl Wallet {
                 let mut calls = fetched.take();
                 calls.push((address, start, end));
                 fetched.set(calls);
-                async move { Ok(response) }
+                async move { Ok(history(response)) }
             },
         )
         .await
@@ -318,12 +322,53 @@ async fn exit_abandons_a_stalled_fetch_and_keeps_the_address_due() {
             BlockHeight::from_u32(TIP),
             now,
             &should_exit,
-            |_, _, _| std::future::pending::<Result<Vec<RawTransaction>, SyncError>>(),
+            |_, _, _| std::future::pending::<Result<ephemeral_checks::History, SyncError>>(),
         ),
     )
     .await
     .expect("exit must not wait for the fetch");
     assert!(!result.unwrap());
+    assert!(
+        w.request_at(&used).unwrap() <= now,
+        "stays due for the next sync"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn each_transaction_is_stored_as_it_arrives() {
+    let mut w = wallet();
+    let used = w.ephemeral[0];
+    w.use_address(used, 1);
+    let now = SystemTime::now();
+    w.set_check_time(&used, now - Duration::from_secs(60));
+
+    // The stream stalls after one transaction, and exit follows.
+    let returned = legacy_transaction(OutPoint::new([9; 32], 0), used, 70_000);
+    let stalled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let signal = stalled.clone();
+    let stream = futures::stream::iter([Ok(raw(&returned, TIP - 5))])
+        .chain(futures::stream::once(async move {
+            signal.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::future::pending::<Result<RawTransaction, SyncError>>().await
+        }))
+        .boxed();
+    let path = w.path.clone();
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        ephemeral_checks::run_with(
+            &mut w.db,
+            &path,
+            w.network,
+            BlockHeight::from_u32(TIP),
+            now,
+            &|| stalled.load(std::sync::atomic::Ordering::SeqCst),
+            move |_, _, _| async move { Ok(stream) },
+        ),
+    )
+    .await
+    .expect("exit must not wait for the stream");
+    assert!(!result.unwrap());
+    assert_eq!(w.received_value(&used), 50_000 + 70_000);
     assert!(
         w.request_at(&used).unwrap() <= now,
         "stays due for the next sync"

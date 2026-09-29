@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::time::SystemTime;
 
+use futures::{stream::BoxStream, StreamExt as _, TryStreamExt as _};
 use transparent::address::TransparentAddress;
 use zcash_client_backend::{
     data_api::{TransactionDataRequest, TransactionsInvolvingAddress, WalletRead, WalletWrite},
@@ -36,6 +37,9 @@ const EPHEMERAL_KEY_SCOPE: i64 = 2;
 /// Mean delay before re-checking an address, matching the backend's daily cadence.
 const CHECK_INTERVAL_SECS: u32 = 24 * 60 * 60;
 
+/// An address history, one transaction per item.
+pub(super) type History = BoxStream<'static, Result<RawTransaction, SyncError>>;
+
 /// Checks one due ephemeral address, then reschedules if none remain due.
 /// Returns whether a transaction new to the wallet was stored.
 pub(super) async fn run(
@@ -53,26 +57,49 @@ pub(super) async fn run(
         tip,
         SystemTime::now(),
         should_exit,
-        |address, start, end| fetch_history(lightwalletd_url, address, start, end),
+        |address, start, end| open_history(lightwalletd_url, address, start, end),
     )
     .await
 }
 
-async fn fetch_history(
+async fn open_history(
     lightwalletd_url: &str,
     address: String,
     start: u64,
     end: u64,
-) -> Result<Vec<RawTransaction>, SyncError> {
+) -> Result<History, SyncError> {
     let mut client = lwd::open_isolated_lwd_channel(lightwalletd_url).await?;
-    let mut stream = lwd::get_taddress_txids(&mut client, address, start, end).await?;
-    let mut txs = Vec::new();
-    while let Some(raw) =
-        lwd::next_stream_message(&mut stream, "ephemeral check get_taddress_txids stream").await?
-    {
-        txs.push(raw);
+    let stream = lwd::get_taddress_txids(&mut client, address, start, end).await?;
+    // The client lives as long as its stream is read.
+    Ok(
+        futures::stream::try_unfold((client, stream), |(client, mut stream)| async move {
+            Ok(
+                lwd::next_stream_message(&mut stream, "ephemeral check get_taddress_txids stream")
+                    .await?
+                    .map(|raw| (raw, (client, stream))),
+            )
+        })
+        .boxed(),
+    )
+}
+
+/// Stores each transaction as it arrives: the server decides how many there are.
+async fn store_history(
+    network: &WalletNetwork,
+    db: &mut WalletDatabase,
+    open: impl Future<Output = Result<History, SyncError>>,
+) -> Result<bool, SyncError> {
+    let mut history = open.await?;
+    let mut stored = false;
+    while let Some(raw) = history.try_next().await? {
+        let known = Transaction::read(&raw.data[..], BranchId::Sapling)
+            .ok()
+            .and_then(|tx| db.get_transaction(tx.txid()).ok().flatten())
+            .is_some();
+        enhancement::store_address_transaction(network, db, &raw.data, raw.height)?;
+        stored |= !known;
     }
-    Ok(txs)
+    Ok(stored)
 }
 
 pub(super) async fn run_with<F, Fut>(
@@ -86,7 +113,7 @@ pub(super) async fn run_with<F, Fut>(
 ) -> Result<bool, SyncError>
 where
     F: FnOnce(String, u64, u64) -> Fut,
-    Fut: Future<Output = Result<Vec<RawTransaction>, SyncError>>,
+    Fut: Future<Output = Result<History, SyncError>>,
 {
     let used = used_ephemeral_addresses(db_path, network)?;
     let mut due = due_requests(db, &used, now)?;
@@ -102,13 +129,13 @@ where
     let start = u64::from(u32::from(request.block_range_start()));
     let end = u64::from(u32::from(tip));
     // Drop the fetch on exit; a lock or reset must not wait for the stream.
-    let fetched = tokio::select! {
+    let result = tokio::select! {
         biased;
         _ = super::watch_for_exit(should_exit) => return Ok(false),
-        fetched = fetch(address, start, end) => fetched,
+        result = store_history(&network, db, fetch(address, start, end)) => result,
     };
-    let txs = match fetched {
-        Ok(txs) => txs,
+    let stored = match result {
+        Ok(stored) => stored,
         Err(error) => {
             // Defer this address so a persistent failure cannot starve the others.
             let _ = with_wallet_db_write_lock("sync_engine.ephemeral_checks.defer", || {
@@ -121,15 +148,6 @@ where
         return Ok(false);
     }
 
-    let mut stored = false;
-    for raw in &txs {
-        let known = Transaction::read(&raw.data[..], BranchId::Sapling)
-            .ok()
-            .and_then(|tx| db.get_transaction(tx.txid()).ok().flatten())
-            .is_some();
-        enhancement::store_address_transaction(&network, db, &raw.data, raw.height)?;
-        stored |= !known;
-    }
     let checked = request.address();
     with_wallet_db_write_lock(
         "sync_engine.ephemeral_checks.notify_address_checked",
