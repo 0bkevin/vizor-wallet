@@ -465,7 +465,7 @@ void main() {
     expect(find.text('Show full address'), findsNothing);
   });
 
-  testWidgets('shows the fee row for a receive with a known fee', (
+  testWidgets('shows no fee row for a receive even with a known fee', (
     tester,
   ) async {
     await _pumpScreen(
@@ -481,8 +481,9 @@ void main() {
       ),
     );
 
-    expect(find.text('Network fee'), findsOneWidget);
-    expect(find.text('0.0001 ZEC'), findsOneWidget);
+    // The sender paid the fee, so a receive shows none.
+    expect(find.text('Network fee'), findsNothing);
+    expect(find.text('0.0001 ZEC'), findsNothing);
   });
 
   testWidgets('shows the in-progress receipt for an unconfirmed receive', (
