@@ -40,15 +40,17 @@ const CHECK_INTERVAL_SECS: u32 = 24 * 60 * 60;
 pub(super) type History = BoxStream<'static, Result<RawTransaction, SyncError>>;
 
 /// Checks one due ephemeral address, then reschedules if none remain due.
-/// Returns whether the check changed what the wallet knows at the address.
+/// Sets `changed` when the check changed what the wallet knows at the address,
+/// even if it then failed.
 pub(super) async fn run(
     lightwalletd_url: &str,
     db: &mut WalletDatabase,
     db_path: &str,
     network: WalletNetwork,
     tip: BlockHeight,
+    changed: &mut bool,
     should_exit: &impl Fn() -> bool,
-) -> Result<bool, SyncError> {
+) -> Result<(), SyncError> {
     run_with(
         db,
         db_path,
@@ -56,6 +58,7 @@ pub(super) async fn run(
         tip,
         SystemTime::now(),
         should_exit,
+        changed,
         |address, start, end| open_history(lightwalletd_url, address, start, end),
     )
     .await
@@ -102,8 +105,9 @@ pub(super) async fn run_with<F, Fut>(
     tip: BlockHeight,
     now: SystemTime,
     should_exit: &impl Fn() -> bool,
+    changed: &mut bool,
     fetch: F,
-) -> Result<bool, SyncError>
+) -> Result<(), SyncError>
 where
     F: FnOnce(String, u64, u64) -> Fut,
     Fut: Future<Output = Result<History, SyncError>>,
@@ -111,11 +115,10 @@ where
     let used = used_ephemeral_addresses(db_path, network)?;
     let mut due = due_requests(db, &used, now)?;
     let Some(request) = due.pop() else {
-        reschedule(db)?;
-        return Ok(false);
+        return reschedule(db);
     };
     if should_exit() {
-        return Ok(false);
+        return Ok(());
     }
 
     let checked = request.address();
@@ -126,10 +129,12 @@ where
     // Drop the fetch on exit; a lock or reset must not wait for the stream.
     let result = tokio::select! {
         biased;
-        _ = super::watch_for_exit(should_exit) => return Ok(false),
+        _ = super::watch_for_exit(should_exit) => return Ok(()),
         result = store_history(&network, db, fetch(address.clone(), start, end)) => result,
     };
     if let Err(error) = result {
+        // Transactions stored before the error still need a refresh.
+        *changed = address_activity(db_path, &address).is_ok_and(|after| after != before);
         // Defer this address so a persistent failure cannot starve the others.
         let _ = with_wallet_db_write_lock("sync_engine.ephemeral_checks.defer", || {
             db.schedule_next_check(&checked, CHECK_INTERVAL_SECS)
@@ -137,11 +142,11 @@ where
         return Err(error);
     }
     if should_exit() {
-        return Ok(false);
+        return Ok(());
     }
 
     // Also catches outputs newly recognized in transactions the wallet had.
-    let changed = address_activity(db_path, &address)? != before;
+    *changed = address_activity(db_path, &address)? != before;
     with_wallet_db_write_lock(
         "sync_engine.ephemeral_checks.notify_address_checked",
         || {
@@ -155,7 +160,7 @@ where
     if due.is_empty() {
         reschedule(db)?;
     }
-    Ok(changed)
+    Ok(())
 }
 
 /// Outputs the wallet knows at `address` and how many of them it saw spent.

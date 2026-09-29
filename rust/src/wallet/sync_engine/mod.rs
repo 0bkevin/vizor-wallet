@@ -4649,17 +4649,27 @@ async fn run_sync_impl(
     }
 
     if !should_exit() {
-        match ephemeral_checks::run(
+        let mut changed = false;
+        if let Err(error) = ephemeral_checks::run(
             lightwalletd_url,
             &mut db,
             db_data_path,
             network,
             BlockHeight::from_u32(final_tip_height as u32),
+            &mut changed,
             &should_exit,
         )
         .await
         {
-            Ok(true) => progress_fn(SyncProgressEvent {
+            log::warn!(
+                "[{}] sync: ephemeral address check failed; it will retry on a later sync: {}",
+                elapsed(),
+                error,
+            );
+        }
+        // Refresh even after a failure that followed stored transactions.
+        if changed && !should_exit() {
+            progress_fn(SyncProgressEvent {
                 scanned_height: final_scanned_height,
                 chain_tip_height: final_tip_height,
                 percentage: 1.0,
@@ -4671,13 +4681,7 @@ async fn run_sync_impl(
                 phase_completed_units: 0,
                 phase_total_units: 0,
                 phase: String::new(),
-            }),
-            Ok(false) => {}
-            Err(error) => log::warn!(
-                "[{}] sync: ephemeral address check failed; it will retry on a later sync: {}",
-                elapsed(),
-                error,
-            ),
+            });
         }
     }
 

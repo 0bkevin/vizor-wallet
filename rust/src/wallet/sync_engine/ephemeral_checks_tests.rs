@@ -141,6 +141,7 @@ impl Wallet {
         response: Vec<RawTransaction>,
         fetched: &Cell<Vec<(String, u64, u64)>>,
     ) -> bool {
+        let mut changed = false;
         ephemeral_checks::run_with(
             &mut self.db,
             &self.path.clone(),
@@ -148,6 +149,7 @@ impl Wallet {
             BlockHeight::from_u32(TIP),
             now,
             &|| false,
+            &mut changed,
             |address, start, end| {
                 let mut calls = fetched.take();
                 calls.push((address, start, end));
@@ -156,7 +158,8 @@ impl Wallet {
             },
         )
         .await
-        .unwrap()
+        .unwrap();
+        changed
     }
 }
 
@@ -283,6 +286,7 @@ async fn a_failing_address_is_deferred_behind_the_others() {
     w.set_check_time(&b, now - Duration::from_secs(60));
 
     let path = w.path.clone();
+    let mut changed = false;
     let result = ephemeral_checks::run_with(
         &mut w.db,
         &path,
@@ -290,10 +294,12 @@ async fn a_failing_address_is_deferred_behind_the_others() {
         BlockHeight::from_u32(TIP),
         now,
         &|| false,
+        &mut changed,
         |_, _, _| async { Err(SyncError::net("unavailable")) },
     )
     .await;
     assert!(result.is_err());
+    assert!(!changed);
     assert!(w.request_at(&a).unwrap() > now, "failed address deferred");
     assert!(w.request_at(&b).unwrap() <= now, "next address stays due");
 }
@@ -313,6 +319,7 @@ async fn exit_abandons_a_stalled_fetch_and_keeps_the_address_due() {
         polls.get() > 1
     };
     let path = w.path.clone();
+    let mut changed = false;
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         ephemeral_checks::run_with(
@@ -322,12 +329,14 @@ async fn exit_abandons_a_stalled_fetch_and_keeps_the_address_due() {
             BlockHeight::from_u32(TIP),
             now,
             &should_exit,
+            &mut changed,
             |_, _, _| std::future::pending::<Result<ephemeral_checks::History, SyncError>>(),
         ),
     )
     .await
     .expect("exit must not wait for the fetch");
-    assert!(!result.unwrap());
+    result.unwrap();
+    assert!(!changed, "an exit reports nothing");
     assert!(
         w.request_at(&used).unwrap() <= now,
         "stays due for the next sync"
@@ -353,6 +362,7 @@ async fn each_transaction_is_stored_as_it_arrives() {
         }))
         .boxed();
     let path = w.path.clone();
+    let mut changed = false;
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         ephemeral_checks::run_with(
@@ -362,12 +372,14 @@ async fn each_transaction_is_stored_as_it_arrives() {
             BlockHeight::from_u32(TIP),
             now,
             &|| stalled.load(std::sync::atomic::Ordering::SeqCst),
+            &mut changed,
             move |_, _, _| async move { Ok(stream) },
         ),
     )
     .await
     .expect("exit must not wait for the stream");
-    assert!(!result.unwrap());
+    result.unwrap();
+    assert!(!changed, "an exit reports nothing");
     assert_eq!(w.received_value(&used), 50_000 + 70_000);
     assert!(
         w.request_at(&used).unwrap() <= now,
@@ -404,4 +416,40 @@ async fn a_newly_recognized_output_in_a_known_transaction_is_reported() {
     let fetched = Cell::new(Vec::new());
     assert!(w.check(now, vec![raw(&returned, TIP - 5)], &fetched).await);
     assert_eq!(w.received_value(&used), 50_000 + 70_000);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn transactions_stored_before_a_stream_error_are_reported() {
+    let mut w = wallet();
+    let used = w.ephemeral[0];
+    w.use_address(used, 1);
+    let now = SystemTime::now();
+    w.set_check_time(&used, now - Duration::from_secs(60));
+
+    let returned = legacy_transaction(OutPoint::new([9; 32], 0), used, 70_000);
+    let stream = futures::stream::iter([
+        Ok(raw(&returned, TIP - 5)),
+        Err(SyncError::net("stream dropped")),
+    ])
+    .boxed();
+    let path = w.path.clone();
+    let mut changed = false;
+    let result = ephemeral_checks::run_with(
+        &mut w.db,
+        &path,
+        w.network,
+        BlockHeight::from_u32(TIP),
+        now,
+        &|| false,
+        &mut changed,
+        move |_, _, _| async move { Ok(stream) },
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(changed, "the stored transaction still needs a refresh");
+    assert_eq!(w.received_value(&used), 50_000 + 70_000);
+    assert!(
+        w.request_at(&used).unwrap() > now,
+        "failed address deferred"
+    );
 }
