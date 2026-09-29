@@ -57,10 +57,35 @@ class ActivityTransactionStatusArgs {
   final GiftCardActivityMetadata? giftCard;
 }
 
+/// Loads the transaction history; injectable so previews and widget tests can
+/// avoid the Rust FFI.
+typedef ActivityTxHistoryLoader =
+    Future<List<rust_sync.TransactionInfo>> Function(String accountUuid);
+
+/// Loads one transaction's detail; injectable for previews and widget tests.
+typedef ActivityTxDetailLoader =
+    Future<rust_sync.TransactionDetail?> Function(
+      String accountUuid,
+      rust_sync.TransactionInfo transaction,
+    );
+
 class ActivityTransactionStatusScreen extends ConsumerStatefulWidget {
-  const ActivityTransactionStatusScreen({super.key, required this.args});
+  const ActivityTransactionStatusScreen({
+    super.key,
+    required this.args,
+    this.historyLoader,
+    this.detailLoader,
+  });
 
   final ActivityTransactionStatusArgs args;
+
+  /// Test seam — production reads the wallet DB through Rust.
+  @visibleForTesting
+  final ActivityTxHistoryLoader? historyLoader;
+
+  /// Test seam — production reads the wallet DB through Rust.
+  @visibleForTesting
+  final ActivityTxDetailLoader? detailLoader;
 
   @override
   ConsumerState<ActivityTransactionStatusScreen> createState() =>
@@ -113,13 +138,7 @@ class _ActivityTransactionStatusScreenState
     }
 
     try {
-      final dbPath = await getWalletDbPath();
-      final endpoint = ref.read(rpcEndpointProvider);
-      final txs = await rust_sync.getTransactionHistory(
-        dbPath: dbPath,
-        network: endpoint.networkName,
-        accountUuid: accountUuid,
-      );
+      final txs = await _loadHistory(accountUuid);
       if (!mounted) return;
       if (accountUuid != ref.read(accountProvider).value?.activeAccountUuid) {
         return;
@@ -136,13 +155,7 @@ class _ActivityTransactionStatusScreenState
       rust_sync.TransactionDetail? detail;
       if (tx != null) {
         try {
-          detail = await rust_sync.getTransactionDetail(
-            dbPath: dbPath,
-            network: endpoint.networkName,
-            accountUuid: accountUuid,
-            txidHex: tx.txidHex,
-            txKind: tx.txKind,
-          );
+          detail = await _loadDetail(accountUuid, tx);
         } catch (e, st) {
           log('ActivityTransactionStatus: detail load failed: $e\n$st');
         }
@@ -175,6 +188,37 @@ class _ActivityTransactionStatusScreenState
         _isLoading = false;
       });
     }
+  }
+
+  Future<List<rust_sync.TransactionInfo>> _loadHistory(
+    String accountUuid,
+  ) async {
+    final loader = widget.historyLoader;
+    if (loader != null) return loader(accountUuid);
+    final dbPath = await getWalletDbPath();
+    final endpoint = ref.read(rpcEndpointProvider);
+    return rust_sync.getTransactionHistory(
+      dbPath: dbPath,
+      network: endpoint.networkName,
+      accountUuid: accountUuid,
+    );
+  }
+
+  Future<rust_sync.TransactionDetail?> _loadDetail(
+    String accountUuid,
+    rust_sync.TransactionInfo transaction,
+  ) async {
+    final loader = widget.detailLoader;
+    if (loader != null) return loader(accountUuid, transaction);
+    final dbPath = await getWalletDbPath();
+    final endpoint = ref.read(rpcEndpointProvider);
+    return rust_sync.getTransactionDetail(
+      dbPath: dbPath,
+      network: endpoint.networkName,
+      accountUuid: accountUuid,
+      txidHex: transaction.txidHex,
+      txKind: transaction.txKind,
+    );
   }
 
   rust_sync.TransactionInfo? _findTransaction(
