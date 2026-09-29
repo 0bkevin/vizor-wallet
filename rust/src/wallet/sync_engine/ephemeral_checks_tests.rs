@@ -374,3 +374,34 @@ async fn each_transaction_is_stored_as_it_arrives() {
         "stays due for the next sync"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_newly_recognized_output_in_a_known_transaction_is_reported() {
+    let mut w = wallet();
+    let used = w.ephemeral[0];
+    w.use_address(used, 1);
+    // A stored transaction whose output to the address was not recognized.
+    let returned = legacy_transaction(OutPoint::new([9; 32], 0), used, 70_000);
+    decrypt_and_store_transaction(
+        &w.network,
+        &mut w.db,
+        &returned,
+        Some(BlockHeight::from_u32(TIP - 5)),
+    )
+    .unwrap();
+    rusqlite::Connection::open(&w.path)
+        .unwrap()
+        .execute(
+            "DELETE FROM transparent_received_outputs WHERE transaction_id =
+                 (SELECT id_tx FROM transactions WHERE txid = ?1)",
+            [returned.txid().as_ref().to_vec()],
+        )
+        .unwrap();
+    assert_eq!(w.received_value(&used), 50_000);
+    let now = SystemTime::now();
+    w.set_check_time(&used, now - Duration::from_secs(60));
+
+    let fetched = Cell::new(Vec::new());
+    assert!(w.check(now, vec![raw(&returned, TIP - 5)], &fetched).await);
+    assert_eq!(w.received_value(&used), 50_000 + 70_000);
+}

@@ -22,8 +22,7 @@ use zcash_client_backend::{
     proto::service::RawTransaction,
 };
 use zcash_keys::encoding::{encode_transparent_address_p, AddressCodec as _};
-use zcash_primitives::transaction::Transaction;
-use zcash_protocol::consensus::{BlockHeight, BranchId};
+use zcash_protocol::consensus::BlockHeight;
 
 use crate::wallet::db::{
     open_readonly_conn_with_timeout, with_wallet_db_write_lock, SYNC_DB_BUSY_TIMEOUT,
@@ -41,7 +40,7 @@ const CHECK_INTERVAL_SECS: u32 = 24 * 60 * 60;
 pub(super) type History = BoxStream<'static, Result<RawTransaction, SyncError>>;
 
 /// Checks one due ephemeral address, then reschedules if none remain due.
-/// Returns whether a transaction new to the wallet was stored.
+/// Returns whether the check changed what the wallet knows at the address.
 pub(super) async fn run(
     lightwalletd_url: &str,
     db: &mut WalletDatabase,
@@ -88,18 +87,12 @@ async fn store_history(
     network: &WalletNetwork,
     db: &mut WalletDatabase,
     open: impl Future<Output = Result<History, SyncError>>,
-) -> Result<bool, SyncError> {
+) -> Result<(), SyncError> {
     let mut history = open.await?;
-    let mut stored = false;
     while let Some(raw) = history.try_next().await? {
-        let known = Transaction::read(&raw.data[..], BranchId::Sapling)
-            .ok()
-            .and_then(|tx| db.get_transaction(tx.txid()).ok().flatten())
-            .is_some();
         enhancement::store_address_transaction(network, db, &raw.data, raw.height)?;
-        stored |= !known;
     }
-    Ok(stored)
+    Ok(())
 }
 
 pub(super) async fn run_with<F, Fut>(
@@ -125,30 +118,30 @@ where
         return Ok(false);
     }
 
-    let address = encode_transparent_address_p(&network, &request.address());
+    let checked = request.address();
+    let address = encode_transparent_address_p(&network, &checked);
+    let before = address_activity(db_path, &address)?;
     let start = u64::from(u32::from(request.block_range_start()));
     let end = u64::from(u32::from(tip));
     // Drop the fetch on exit; a lock or reset must not wait for the stream.
     let result = tokio::select! {
         biased;
         _ = super::watch_for_exit(should_exit) => return Ok(false),
-        result = store_history(&network, db, fetch(address, start, end)) => result,
+        result = store_history(&network, db, fetch(address.clone(), start, end)) => result,
     };
-    let stored = match result {
-        Ok(stored) => stored,
-        Err(error) => {
-            // Defer this address so a persistent failure cannot starve the others.
-            let _ = with_wallet_db_write_lock("sync_engine.ephemeral_checks.defer", || {
-                db.schedule_next_check(&request.address(), CHECK_INTERVAL_SECS)
-            });
-            return Err(error);
-        }
-    };
+    if let Err(error) = result {
+        // Defer this address so a persistent failure cannot starve the others.
+        let _ = with_wallet_db_write_lock("sync_engine.ephemeral_checks.defer", || {
+            db.schedule_next_check(&checked, CHECK_INTERVAL_SECS)
+        });
+        return Err(error);
+    }
     if should_exit() {
         return Ok(false);
     }
 
-    let checked = request.address();
+    // Also catches outputs newly recognized in transactions the wallet had.
+    let changed = address_activity(db_path, &address)? != before;
     with_wallet_db_write_lock(
         "sync_engine.ephemeral_checks.notify_address_checked",
         || {
@@ -162,7 +155,24 @@ where
     if due.is_empty() {
         reschedule(db)?;
     }
-    Ok(stored)
+    Ok(changed)
+}
+
+/// Outputs the wallet knows at `address` and how many of them it saw spent.
+fn address_activity(db_path: &str, address: &str) -> Result<(i64, i64), SyncError> {
+    let conn = open_readonly_conn_with_timeout(db_path, Some(SYNC_DB_BUSY_TIMEOUT))
+        .map_err(SyncError::db)?;
+    conn.query_row(
+        "SELECT COUNT(DISTINCT tro.id), COUNT(s.transaction_id)
+         FROM addresses a
+         JOIN transparent_received_outputs tro ON tro.address_id = a.id
+         LEFT JOIN transparent_received_output_spends s
+             ON s.transparent_received_output_id = tro.id
+         WHERE a.cached_transparent_receiver_address = ?1",
+        [address],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .map_err(|e| SyncError::db(format!("read ephemeral address activity: {e}")))
 }
 
 /// Due requests for used ephemeral addresses, earliest-due last.
