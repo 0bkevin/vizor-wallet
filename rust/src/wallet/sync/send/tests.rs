@@ -1347,6 +1347,16 @@ fn migration_test_stage(
     }
 }
 
+fn init_outbox_receipt_wallet(db_path: &str) {
+    crate::wallet::keys::ensure_db_initialized(db_path, WalletNetwork::Test).unwrap();
+    // These outbox fixtures use synthetic pre-Sapling heights. Provide the
+    // chain frontier required to record conservative transaction creation evidence.
+    Connection::open(db_path).unwrap().execute(
+        "INSERT INTO scan_queue (block_range_start, block_range_end, priority) VALUES (0, 101, 0)",
+        [],
+    ).unwrap();
+}
+
 fn create_outbox_receipt_test_run(
     expiry_height: u32,
 ) -> (tempfile::TempDir, String, String, String) {
@@ -1356,6 +1366,7 @@ fn create_outbox_receipt_test_run(
         .join("wallet.db")
         .to_string_lossy()
         .to_string();
+    init_outbox_receipt_wallet(&db_path);
     let denomination_input_txid = "30".repeat(32);
     let selected_note_txid = "10".repeat(32);
     let pending_txid = "20".repeat(32);
@@ -1527,7 +1538,10 @@ fn seed_local_transaction_bytes(db_path: &str, txid_hex: &str) {
         .unwrap()
         .execute(
             "INSERT INTO transactions (txid, raw, expiry_height, min_observed_height)
-             VALUES (?1, ?2, 69120, 100)",
+             VALUES (?1, ?2, 69120, 100)
+             ON CONFLICT(txid) DO UPDATE SET raw = excluded.raw,
+                 expiry_height = excluded.expiry_height,
+                 min_observed_height = excluded.min_observed_height",
             params![hex::decode(txid_hex).unwrap(), vec![5u8, 6, 7, 8]],
         )
         .unwrap();
@@ -1668,7 +1682,11 @@ fn stored_stop_transaction_holds_inputs_through_its_expiry_after_a_reorg() {
         .unwrap()
         .execute(
             "INSERT INTO transactions (txid, raw, block, mined_height, expiry_height, min_observed_height)
-             VALUES (?1, X'05060708', 101, 101, 69120, 100)",
+             VALUES (?1, X'05060708', 101, 101, 69120, 100)
+             ON CONFLICT(txid) DO UPDATE SET raw = excluded.raw,
+                 block = excluded.block, mined_height = excluded.mined_height,
+                 expiry_height = excluded.expiry_height,
+                 min_observed_height = excluded.min_observed_height",
             params![hex::decode(&pending_txid).unwrap()],
         )
         .unwrap();
@@ -2955,6 +2973,7 @@ fn scheduled_storage_failure_after_acceptance_marks_broadcasted() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("wallet.db");
     let db_path = db_path.to_string_lossy().to_string();
+    init_outbox_receipt_wallet(&db_path);
     let denomination_input_txid =
         "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f";
     let selected_note_txid = "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f";

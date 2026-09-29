@@ -50,7 +50,6 @@ use shardtree::{
     error::{QueryError, ShardTreeError},
     store::ShardStore,
 };
-use tonic::Code;
 use transparent::{address::TransparentAddress, bundle::OutPoint, keys::TransparentKeyScope};
 use zcash_client_backend::data_api::wallet::input_selection::{
     GreedyInputSelector, InputSelector, LockFilter, LockedInputPolicy, NoteSelection,
@@ -2264,7 +2263,14 @@ pub(crate) async fn retire_unbroadcast_orchard_migration(
     account_uuid: &str,
     expected_run_id: &str,
 ) -> Result<(), String> {
+    use zakura_transaction_status::{lightwalletd::LightwalletdSource, StatusObservation};
     let _migration_guard = ActiveIronwoodMigration::acquire(db_path, account_uuid)?;
+    super::migration::backfill_unbroadcast_migration_creation_evidence(
+        db_path,
+        account_uuid,
+        network,
+        expected_run_id,
+    )?;
     let candidates = super::migration::unbroadcast_migration_recovery_candidates(
         db_path,
         account_uuid,
@@ -2281,16 +2287,36 @@ pub(crate) async fn retire_unbroadcast_orchard_migration(
         u32::try_from(chain_tip.height).map_err(|_| "Migration recovery chain tip exceeds u32")?;
     validate_unbroadcast_migration_recovery_candidates(&candidates, chain_tip_height)?;
 
+    let never_exit = || false;
+    let public_source = LightwalletdSource::new(move || async move { Ok(client) }, &never_exit);
+    let policy = sync_engine::enhancement::EnhancementPolicy::current(network);
+    let mut reader =
+        sync_engine::enhancement::status::reader(db_path, network, &never_exit, public_source);
+
+    use zcash_client_backend::data_api::status::TransactionStatusRead;
+    let mut status_db = super::open_wallet_db_for_read(db_path, network)?;
+    status_db.set_status_mode(policy.status_mode());
     for candidate in &candidates {
         let txid = parse_txid_hex(&candidate.txid_hex)?;
-        match sync_engine::get_transaction(&mut client, txid.as_ref().to_vec()).await {
+        let observation = reader
+            .observe(
+                status_db
+                    .transaction_status_work_for(txid)
+                    .map_err(|e| e.to_string())?,
+                Some(chain_tip_height),
+            )
+            .await;
+        match observation {
+            Ok(StatusObservation::NotFound) => {}
             Ok(_) => {
                 return Err(format!(
                     "Migration transaction {} is present in the mempool or chain",
                     candidate.txid_hex
                 ));
             }
-            Err(status) if status.code() == Code::NotFound => {}
+            Err(zakura_transaction_status::StatusError::CoverageIncomplete) => {
+                return Err("Migration recovery is pending sufficient private status coverage; the run is unchanged".into());
+            }
             Err(status) => {
                 return Err(format!(
                     "Could not verify migration transaction {}: {status}",
@@ -6612,9 +6638,9 @@ pub(crate) struct ResubmitStats {
 /// The helper takes a `should_exit` closure that reflects the
 /// sync loop's cancel / mode-change condition. It is consulted:
 ///
-///   * Before iterating the candidate list at all (so a cancel
-///     arriving during `run_enhancement` aborts the resubmit pass
-///     entirely without opening a single rebroadcast RPC).
+///   * Before iterating the candidate list at all (so a cancel arriving during
+///     the enhancement checkpoint aborts the resubmit pass entirely
+///     without opening a single rebroadcast RPC).
 ///   * Before every individual candidate's first broadcast.
 ///   * Before the retry call for any candidate that failed on
 ///     its first attempt.

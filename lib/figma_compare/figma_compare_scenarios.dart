@@ -1177,6 +1177,23 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     builder: buildImportCustomiseAccountUseCase,
   ),
   FigmaCompareScenario(
+    id: 'settings-recovery',
+    description: 'Private recovery setting at rest',
+    builder: buildSettingsRecoveryUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'settings-recovery-changing',
+    description: 'Private recovery setting transition',
+    builder: buildSettingsRecoveryChangingUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'mobile-settings-recovery-changing',
+    description: 'Mobile private recovery setting transition',
+    builder: buildMobileSettingsRecoveryChangingUseCase,
+    desktop: false,
+    mobile: true,
+  ),
+  FigmaCompareScenario(
     id: 'settings-main',
     description: 'Desktop settings with Tor privacy control',
     builder: buildSettingsMainUseCase,
@@ -1263,8 +1280,19 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
   ),
   FigmaCompareScenario(
     id: 'welcome-network-settings',
-    description: 'Desktop first-wallet network settings with Tor control',
+    description:
+        'Desktop first-wallet network settings with Tor and private queries',
     builder: buildWelcomeNetworkSettingsUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'welcome-private-queries-enabled',
+    description: 'Desktop onboarding with private queries enabled',
+    builder: buildWelcomePrivateQueriesEnabledUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'welcome-private-queries-changing',
+    description: 'Desktop onboarding while private queries are being saved',
+    builder: buildWelcomePrivateQueriesChangingUseCase,
   ),
   FigmaCompareScenario(
     id: 'welcome-network-settings-tor-connected',

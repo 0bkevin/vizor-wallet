@@ -38,6 +38,7 @@ import 'package:zcash_wallet/src/features/swap/providers/pay_selected_asset_stor
 import 'package:zcash_wallet/src/features/swap/providers/swap_state_provider.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
 import 'package:zcash_wallet/src/providers/privacy_mode_provider.dart';
+import 'package:zcash_wallet/src/providers/sync_failure.dart';
 import 'package:zcash_wallet/src/providers/sync_keep_awake_provider.dart';
 import 'package:zcash_wallet/src/providers/sync_provider.dart';
 import 'package:zcash_wallet/src/providers/zec_price_change_provider.dart';
@@ -269,6 +270,13 @@ Widget _app(
         GoRoute(path: '/home', builder: (_, _) => const MobileHomeScreen()),
       GoRoute(path: '/send', builder: (_, _) => const Text('send route')),
       GoRoute(path: '/receive', builder: (_, _) => const Text('receive route')),
+      GoRoute(
+        path: '/settings',
+        builder: (_, _) => const Text(
+          'settings route',
+          key: ValueKey('mobile_settings_route'),
+        ),
+      ),
       GoRoute(
         path: '/home/ledger-shield',
         builder: (_, _) => const Text(
@@ -645,6 +653,37 @@ class _DeferredVotingStore implements VotingHomeCacheStore {
 }
 
 void main() {
+  testWidgets('private status coverage notice opens settings', (tester) async {
+    await tester.pumpWidget(
+      _app(
+        _syncedState().copyWith(
+          failure: classifySyncFailure('private status coverage incomplete'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('mobile_private_status_coverage_notice')),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        "Private transaction lookup couldn't determine a transaction's "
+        'status. Turn off experimental private queries in Settings to continue '
+        'syncing.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('mobile_private_status_coverage_settings')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('mobile_settings_route')), findsOneWidget);
+  });
+
   testWidgets(
     'Home renders before cache read and restores the card during sync',
     (tester) async {

@@ -1234,3 +1234,6 @@ mod tests {
         discard_proposal(id, "missing-flow").unwrap(); // cleanup must not panic
     }
 }
+
+#[cfg(test)]
+pub(crate) use transactions::resubmission_tests::populate_recovery_wallet;

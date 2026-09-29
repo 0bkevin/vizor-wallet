@@ -42,6 +42,7 @@ import 'src/features/activity/screens/swap_activity_detail_screen.dart';
 import 'src/features/accounts/screens/accounts_screen.dart';
 import 'src/features/address_book/screens/address_book_screen.dart';
 import 'src/features/home/screens/home_screen.dart';
+import 'src/features/migration/services/ironwood_migration_background_credential_store.dart';
 import 'src/features/donation/donation_config.dart';
 import 'src/features/donation/screens/donation_screen.dart';
 import 'src/features/ledger/ledger_capability.dart';
@@ -120,6 +121,7 @@ import 'src/features/voting/screens/voting_status_screen.dart';
 import 'src/features/voting/screens/voting_submission_confirmation_screen.dart';
 import 'src/providers/theme_mode_provider.dart';
 import 'src/providers/app_security_provider.dart';
+import 'src/providers/enhance_pir_provider.dart';
 import 'src/providers/linux_update_provider.dart';
 import 'src/providers/network_privacy_provider.dart';
 import 'src/providers/rpc_endpoint_failover_provider.dart';
@@ -213,18 +215,58 @@ Future<Widget> buildBootstrappedZcashWalletApp({
   List<Override> overrides = const [],
 }) async {
   final bootstrap = await loadAppBootstrap();
+  await applyEnhancePirPolicy(bootstrap);
   return BootstrappedZcashWalletApp(
     initialBootstrap: bootstrap,
     overrides: overrides,
   );
 }
 
+/// Applies the saved private queries setting to Rust and to native
+/// background work before any sync or background preparation can start.
+///
+/// A blocked bootstrap applies nothing. Its state carries defaults, not the
+/// saved preference, so applying it could relax native background work from
+/// private to public while the app cannot run. Native keeps its last value, or
+/// private when it never received one, and Rust stays public with no sync
+/// running until a retried bootstrap succeeds.
+@visibleForTesting
+Future<void> applyEnhancePirPolicy(
+  AppBootstrapState bootstrap, {
+  void Function(bool enabled)? setRustEnabled,
+  Future<void> Function(bool enabled)? setNativePrivateRecovery,
+}) async {
+  if (bootstrap.hasBlockingFailure) {
+    log('bootstrap: blocked; leaving private recovery policy unchanged');
+    return;
+  }
+  final enabled =
+      bootstrap.enhancePirEnabled &&
+      isEnhancePirAvailableForNetwork(bootstrap.network);
+  (setRustEnabled ??
+      (enabled) => rust_sync.setEnhancePirEnabled(enabled: enabled))(enabled);
+  try {
+    await (setNativePrivateRecovery ??
+        IronwoodMigrationBackgroundLifecycle.instance.setPrivateRecovery)(
+      enabled,
+    );
+  } catch (error) {
+    // Native keeps its last value, or private when it never received one.
+    log(
+      'bootstrap: could not apply private recovery to background work: $error',
+    );
+  }
+}
+
 /// Shared production configuration for immediate and Linux keyring startup.
 /// Preview/test builders remain opted out of native input monitoring.
 Future<BootstrappedZcashWalletApp> buildProductionZcashWalletApp({
   Future<AppBootstrapState> Function() loadBootstrap = loadAppBootstrap,
+  Future<void> Function(AppBootstrapState) applyPrivacyPolicy =
+      applyEnhancePirPolicy,
 }) async {
   final bootstrap = await loadBootstrap();
+  await applyPrivacyPolicy(bootstrap);
   return BootstrappedZcashWalletApp(
     initialBootstrap: bootstrap,
     overrides: [
@@ -274,6 +316,7 @@ class _BootstrappedZcashWalletAppState
 
   Future<void> _reloadBootstrap() async {
     final bootstrap = await loadAppBootstrap();
+    await applyEnhancePirPolicy(bootstrap);
     if (!mounted) return;
     setState(() {
       _bootstrap = bootstrap;

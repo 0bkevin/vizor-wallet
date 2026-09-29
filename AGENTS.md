@@ -427,7 +427,15 @@ The entire sync loop runs in Rust (`rust/src/wallet/sync_engine.rs`). A single c
 2. Download subtree roots (sapling + orchard, incremental with start_index optimization)
 3. Download compact blocks into memory (in-memory `MemoryBlockSource`, no file I/O)
 4. `scan_cached_blocks` from memory (100 blocks per batch)
-5. Enhancement: fetch full tx data (`GetStatus`, `Enhancement`, `TransactionsInvolvingAddress`). librustzcash persistently requests `GetStatus` only when compact-block scanning cannot observe the transaction's mined state. During recovery, Vizor separately excludes previously mined transactions from resubmission while a pending scan range can still restore their mined heights.
+5. Enhancement: process each work queue separately. Status observations come
+   from `transaction_status_work()`, which routes each obligation to public
+   `GetTransaction` or private Status PIR. Payload recovery comes from
+   `transaction_enhancement_work()`. `transaction_data_requests()` feeds only
+   transparent-address history (`TransactionsInvolvingAddress`). librustzcash
+   persistently requests `GetStatus` only when compact-block scanning cannot
+   observe the transaction's mined state. During recovery, Vizor separately
+   excludes previously mined transactions from resubmission while a pending
+   scan range can still restore their mined heights.
 6. Progress streamed to Dart via FRB `StreamSink` per batch
 
 Single DB connection reused across entire sync (opened once, passed to all operations).
@@ -657,6 +665,17 @@ while an executed denomination preparation waits for confirmations.
   than proving the migration failed. Expiry posts no notification of its own:
   scopes whose waves already confirmed keep their earlier step-confirmed
   alert, and the interrupted wave resumes when the re-armed task runs.
+- While private queries are on, the task does not track
+  confirmations. A background pass cannot advance the wallet's scanned
+  state, so it can never accept a Status PIR anchor, and it must not fall back
+  to a public `GetTransaction`. `migrationPreparationContinuedTaskDisposition`
+  maps a continued-processing target to `.foregroundOnly`, so the task is not
+  submitted (`blocked_private_recovery`) and a launched task hands off to the
+  foreground. Dart sends the effective setting through the
+  `setPrivateRecovery` channel method at startup and on every toggle. Native
+  treats a value it never received as private. Dart likewise resolves an
+  unreadable saved preference to private for that launch without writing it
+  back, and a blocked bootstrap applies no setting at all.
 
 ### Send Flow
 

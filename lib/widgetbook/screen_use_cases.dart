@@ -1,3 +1,4 @@
+import '../src/providers/enhance_pir_provider.dart';
 // ignore_for_file: depend_on_referenced_packages
 // widgetbook is dev-only; see `widgetbook.dart` for the boundary.
 
@@ -185,12 +186,22 @@ Widget buildWelcomeNetworkSettingsTorConnectedUseCase(BuildContext context) {
 }
 
 Widget _buildWelcomeNetworkSettingsUseCase(
-  NetworkPrivacyState networkPrivacyState,
-) {
+  NetworkPrivacyState networkPrivacyState, {
+  bool recoveryChanging = false,
+  bool recoveryEnabled = false,
+}) {
   return ProviderScope(
     overrides: [
       appBootstrapProvider.overrideWithValue(AppBootstrapState.empty),
       appLayoutProvider.overrideWith(_NoOpLayoutNotifier.new),
+      enhancePirAvailableProvider.overrideWithValue(true),
+      enhancePirProvider.overrideWith(
+        () => _PreviewWelcomePrivacy(recoveryEnabled),
+      ),
+      if (recoveryChanging)
+        enhancePirTransitionProvider.overrideWith(
+          _PreviewEnhancePirChanging.new,
+        ),
       networkPrivacyProvider.overrideWith(
         () => _PreviewNetworkPrivacyNotifier(networkPrivacyState),
       ),
@@ -746,9 +757,17 @@ Widget buildSettingsSupportVizorUseCase(BuildContext context) {
 
 /// Real mobile settings and tab bar, pinned to the app footer for visual review.
 /// The version still comes from VIZOR_RELEASE_VERSION, just as in a release.
-Widget buildMobileSettingsFooterUseCase(BuildContext context) {
+Widget buildMobileSettingsFooterUseCase(BuildContext context) =>
+    _buildMobileSettingsFooterUseCase();
+Widget _buildMobileSettingsFooterUseCase({bool recoveryChanging = false}) {
   return ProviderScope(
     overrides: [
+      if (recoveryChanging) ...[
+        enhancePirProvider.overrideWith(_PreviewEnhancePirEnabled.new),
+        enhancePirTransitionProvider.overrideWith(
+          _PreviewEnhancePirChanging.new,
+        ),
+      ],
       appBootstrapProvider.overrideWithValue(
         _accountsBootstrap(_accountsDesignState, initialLocation: '/settings'),
       ),
@@ -929,9 +948,16 @@ Widget buildSettingsTorFailedUseCase(BuildContext context) {
 Widget _buildSettingsMainUseCase(
   NetworkPrivacyState networkPrivacyState, {
   double initialScrollOffset = 0,
+  bool recoveryChanging = false,
 }) {
   return ProviderScope(
     overrides: [
+      if (recoveryChanging) ...[
+        enhancePirProvider.overrideWith(_PreviewEnhancePirEnabled.new),
+        enhancePirTransitionProvider.overrideWith(
+          _PreviewEnhancePirChanging.new,
+        ),
+      ],
       appBootstrapProvider.overrideWithValue(
         _accountsBootstrap(_accountsDesignState, initialLocation: '/settings'),
       ),
@@ -1546,7 +1572,6 @@ Widget buildDesktopHomeSidebarSyncNetworkErrorUseCase(BuildContext context) {
         kind: SyncFailureKind.network,
         rawMessage: 'network failed',
         userMessage: 'Network connection lost.',
-        showSettingsAction: false,
       ),
     ),
     migrationCta: const IronwoodHomeMigrationCtaState.hidden(),
@@ -5058,7 +5083,10 @@ class _PreviewSyncNotifier extends SyncNotifier {
   }
 
   @override
-  void resumeAfterWalletMutation(WalletMutationSyncPause pause) {}
+  void resumeAfterWalletMutation(
+    WalletMutationSyncPause pause, {
+    bool forceRestart = false,
+  }) {}
 
   @override
   Future<void> clearSensitiveStateForLock() async {}
@@ -5420,4 +5448,52 @@ class _GiftCardPreviewSyncNotifier extends _PreviewSyncNotifier {
       state = AsyncData(current.copyWith(recentTransactions: transactions));
     }
   }
+}
+
+/// Steady state of the private recovery control. The mobile counterpart is
+/// `buildMobileSettingsFooterUseCase`, which already scrolls to the same
+/// group, so there is no separate mobile fixture.
+Widget buildSettingsRecoveryUseCase(BuildContext context) =>
+    _buildSettingsMainUseCase(
+      const NetworkPrivacyState.off(),
+      initialScrollOffset: 900,
+    );
+
+Widget buildSettingsRecoveryChangingUseCase(BuildContext context) =>
+    _buildSettingsMainUseCase(
+      const NetworkPrivacyState.off(),
+      recoveryChanging: true,
+      initialScrollOffset: 900,
+    );
+Widget buildMobileSettingsRecoveryChangingUseCase(BuildContext context) =>
+    _buildMobileSettingsFooterUseCase(recoveryChanging: true);
+
+class _PreviewEnhancePirEnabled extends EnhancePirNotifier {
+  @override
+  bool build() => true;
+}
+
+class _PreviewEnhancePirChanging extends EnhancePirTransitionNotifier {
+  @override
+  String? build() => 'Changing setting…';
+}
+
+Widget buildWelcomePrivateQueriesEnabledUseCase(BuildContext context) =>
+    _buildWelcomeNetworkSettingsUseCase(
+      const NetworkPrivacyState.off(),
+      recoveryEnabled: true,
+    );
+Widget buildWelcomePrivateQueriesChangingUseCase(BuildContext context) =>
+    _buildWelcomeNetworkSettingsUseCase(
+      const NetworkPrivacyState.off(),
+      recoveryChanging: true,
+    );
+
+class _PreviewWelcomePrivacy extends EnhancePirNotifier {
+  _PreviewWelcomePrivacy(this.enabled);
+  final bool enabled;
+  @override
+  bool build() => enabled;
+  @override
+  Future<void> set(bool enabled) async => state = enabled;
 }

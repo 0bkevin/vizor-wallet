@@ -119,6 +119,15 @@ import UIKit
         BackgroundMigrationManager.shared.schedule { scheduled in
           DispatchQueue.main.async { result(scheduled) }
         }
+      case "setPrivateRecovery":
+        guard let arguments = call.arguments as? [String: Any],
+          let enabled = arguments["enabled"] as? Bool
+        else {
+          result(FlutterError(code: "invalid_arguments", message: "Missing private recovery value.", details: nil))
+          return
+        }
+        BackgroundMigrationPrivateRecovery.set(enabled)
+        result(true)
       case "startPreparation":
         if #available(iOS 26.0, *) {
           BackgroundMigrationPreparationManager.shared.start {
@@ -312,10 +321,14 @@ import UIKit
         gate.pause(leaseId: leaseId)
         DispatchQueue.global(qos: .utility).async {
           // Includes runOutboxOnceNow, not just BGProcessingTask's queue.
-          gate.waitUntilIdle()
+          gate.waitUntilIdle(leaseId: leaseId)
           DispatchQueue.main.async {
+            guard gate.contains(leaseId: leaseId) else {
+              result(false)
+              return
+            }
             BackgroundMigrationManager.shared.quiesce { outboxSuccess in
-              guard outboxSuccess else {
+              guard outboxSuccess, gate.contains(leaseId: leaseId) else {
                 result(false)
                 return
               }
