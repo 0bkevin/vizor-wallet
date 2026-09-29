@@ -35,6 +35,7 @@ import '../../send/widgets/send_recipient_resolver.dart';
 import '../../send/widgets/send_status_content_view.dart';
 import '../../send/widgets/send_verify_address_overlay.dart';
 import '../../swap/models/swap_fiat_value_formatting.dart';
+import '../activity_row_mapper.dart' show transactionShowsZeroAmount;
 import '../gift_card_activity_index.dart';
 import '../widgets/gift_card_activity_detail_view.dart';
 import '../widgets/received_receipt_view.dart';
@@ -293,7 +294,10 @@ class _ActivityTransactionStatusScreenState
     if (privacyModeEnabled) {
       return hideAmountIfPrivacyMode('', privacyModeEnabled: true);
     }
-    if (tx.displayAmount == BigInt.zero) return '--';
+    if (tx.displayAmount == BigInt.zero &&
+        !transactionShowsZeroAmount(tx.txKind)) {
+      return '--';
+    }
     return hideAmountIfPrivacyMode(
       ZecAmount.fromZatoshi(tx.displayAmount).activityDetail.toString(),
       privacyModeEnabled: privacyModeEnabled,

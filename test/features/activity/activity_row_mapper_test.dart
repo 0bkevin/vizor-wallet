@@ -250,6 +250,38 @@ void main() {
     expect(row.leadingIconName, isNot(AppIcons.loader));
   });
 
+  testWidgets('zero-value sends and receipts show 0 ZEC', (tester) async {
+    for (final kind in ['sent', 'received', 'receiving']) {
+      final row = await mapRow(
+        tester,
+        _transaction(txKind: kind, displayAmount: BigInt.zero),
+      );
+      expect(
+        row.amountText,
+        activityAmountTextForFormFactor('0 ZEC'),
+        reason: kind,
+      );
+    }
+
+    final failedSend = await mapRow(
+      tester,
+      _transaction(
+        txKind: 'sent',
+        minedHeight: BigInt.zero,
+        expiredUnmined: true,
+        displayAmount: BigInt.zero,
+      ),
+    );
+    expect(failedSend.title, 'Send failed');
+    expect(failedSend.amountSubtitle, isNull);
+
+    final unknown = await mapRow(
+      tester,
+      _transaction(txKind: 'unknown', displayAmount: BigInt.zero),
+    );
+    expect(unknown.amountText, activityAmountTextForFormFactor('--'));
+  });
+
   testWidgets('transaction rows route the amount through the form-factor gate', (
     tester,
   ) async {
