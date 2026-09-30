@@ -110,6 +110,14 @@ addresses with no mined output, including those funded only by a first leg that
 never mined, are not queried. Debug builds treat scheduled checks as due
 when `ZCASH_E2E_EPHEMERAL_CHECKS_DUE_NOW` is set; the TEX send E2E uses this.
 
+A first leg's output stays unspendable until a check sees it unspent past the
+leg's expiry, which is how the wallet recovers funds a failed second leg left
+behind. The backend records that only for outputs without a stored spend, so a
+second leg that was stored before broadcast and then expired would strand them;
+the check also records outputs whose every stored spend expired unmined. A
+check that makes an output spendable is reported like one that stores a
+transaction, so the balance refreshes.
+
 The backend reserves the next ephemeral address whenever a TEX pair is built
 and never returns it. It reserves at most ten past the last address a mined
 transaction used, so ten cancelled hardware approvals in a row would block TEX

@@ -153,6 +153,24 @@ impl Wallet {
         first_leg
     }
 
+    /// Records a second leg spending `first_leg`'s ephemeral output.
+    fn store_second_leg(&mut self, first_leg: &Transaction, mined: Option<u32>, expiry: u32) {
+        let recipient = TransparentAddress::PublicKeyHash([0x42; 20]);
+        let second_leg = expiring_transaction(
+            OutPoint::new(*first_leg.txid().as_ref(), 0),
+            recipient,
+            40_000,
+            expiry,
+        );
+        decrypt_and_store_transaction(
+            &self.network,
+            &mut self.db,
+            &second_leg,
+            mined.map(BlockHeight::from_u32),
+        )
+        .unwrap();
+    }
+
     fn external_address(&self) -> TransparentAddress {
         let conn = rusqlite::Connection::open(&self.path).unwrap();
         let address: String = conn
@@ -556,4 +574,46 @@ async fn a_check_that_makes_a_first_leg_output_spendable_is_reported() {
             .await
     );
     assert_eq!(w.spendable_value(&used), 50_000);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_first_leg_output_whose_stored_second_leg_expired_becomes_spendable() {
+    let mut w = wallet();
+    let used = w.ephemeral[0];
+    let first_leg = w.fund_first_leg(used);
+    w.store_second_leg(&first_leg, None, FIRST_LEG_EXPIRY);
+    assert_eq!(w.spendable_value(&used), 0);
+    let now = SystemTime::now();
+    w.set_check_time(&used, now - Duration::from_secs(60));
+
+    let fetched = Cell::new(Vec::new());
+    assert!(
+        w.check(now, vec![raw(&first_leg, TIP - 50)], &fetched)
+            .await
+    );
+    assert_eq!(w.spendable_value(&used), 50_000);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_first_leg_output_a_second_leg_spent_or_can_still_spend_stays_unspendable() {
+    for (mined, expiry) in [
+        (None, TIP + 10),
+        (None, 0),
+        (Some(TIP - 40), FIRST_LEG_EXPIRY),
+    ] {
+        let mut w = wallet();
+        let used = w.ephemeral[0];
+        let first_leg = w.fund_first_leg(used);
+        w.store_second_leg(&first_leg, mined, expiry);
+        let now = SystemTime::now();
+        w.set_check_time(&used, now - Duration::from_secs(60));
+
+        let fetched = Cell::new(Vec::new());
+        assert!(
+            !w.check(now, vec![raw(&first_leg, TIP - 50)], &fetched)
+                .await,
+            "{mined:?} {expiry}"
+        );
+        assert_eq!(w.spendable_value(&used), 0, "{mined:?} {expiry}");
+    }
 }
