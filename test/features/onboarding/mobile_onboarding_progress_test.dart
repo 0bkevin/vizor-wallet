@@ -5,20 +5,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zcash_wallet/src/features/onboarding/mobile/mobile_onboarding_progress.dart';
 
 void main() {
-  test('create progress includes welcome before method selection', () {
-    expect(kMobileCreateStepCount, 8);
-    expect(mobileCreateProgress(1), closeTo(1 / 9, 0.0001));
-    expect(mobileCreateProgress(2), closeTo(2 / 9, 0.0001));
-    expect(mobileCreateProgress(7), closeTo(7 / 9, 0.0001));
-    expect(mobileCreateProgress(8), closeTo(8 / 9, 0.0001));
+  test('create progress counts Welcome before direct Introduction', () {
+    expect(kMobileCreateStepCount, 7);
+    expect(mobileCreateProgress(1), closeTo(1 / 8, 0.0001));
+    expect(mobileCreateProgress(2), closeTo(2 / 8, 0.0001));
+    expect(mobileCreateProgress(6), closeTo(6 / 8, 0.0001));
+    expect(mobileCreateProgress(7), closeTo(7 / 8, 0.0001));
   });
 
-  test('import progress includes the review step', () {
-    expect(kMobileImportStepCount, 4);
-    expect(mobileImportProgress(1), closeTo(0.2, 0.0001));
-    expect(mobileImportProgress(2), closeTo(0.4, 0.0001));
-    expect(mobileImportProgress(3), closeTo(0.6, 0.0001));
-    expect(mobileImportProgress(4), closeTo(0.8, 0.0001));
+  test('import advances after selection and reserves terminal completion', () {
+    expect(kMobileImportStepCount, 5);
+    var previous = kMobileSelectionProgress;
+    for (var step = 1; step <= kMobileImportStepCount; step++) {
+      final progress = mobileImportProgress(step);
+      expect(progress, greaterThan(previous));
+      expect(progress, lessThan(1));
+      previous = progress;
+    }
   });
 
   test('keystone passcode progress stays on the existing fill', () {
