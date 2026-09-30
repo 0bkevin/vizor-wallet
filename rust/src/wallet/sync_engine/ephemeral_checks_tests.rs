@@ -3,17 +3,50 @@ use std::cell::Cell;
 use std::time::{Duration, SystemTime};
 
 use zcash_client_backend::{
-    data_api::{wallet::decrypt_and_store_transaction, TransactionDataRequest},
+    data_api::{
+        wallet::{decrypt_and_store_transaction, ConfirmationsPolicy},
+        TransactionDataRequest,
+    },
     proto::service::RawTransaction,
 };
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::consensus::BranchId;
 
 const TIP: u32 = 2_000_100;
+const FIRST_LEG_EXPIRY: u32 = TIP - 10;
 
 fn legacy_transaction(prevout: OutPoint, recipient: TransparentAddress, value: u64) -> Transaction {
     // Pre-Overwinter v1 transparent transaction, as in the recovery tests.
     let mut bytes = 1u32.to_le_bytes().to_vec();
+    push_transparent_bundle(&mut bytes, prevout, recipient, value);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    Transaction::read(&bytes[..], BranchId::Sprout).unwrap()
+}
+
+/// A v4 transparent transaction, which unlike v1 carries an expiry height.
+fn expiring_transaction(
+    prevout: OutPoint,
+    recipient: TransparentAddress,
+    value: u64,
+    expiry: u32,
+) -> Transaction {
+    let mut bytes = (4u32 | 1 << 31).to_le_bytes().to_vec();
+    bytes.extend_from_slice(&0x892F_2085u32.to_le_bytes());
+    push_transparent_bundle(&mut bytes, prevout, recipient, value);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&expiry.to_le_bytes());
+    bytes.extend_from_slice(&0i64.to_le_bytes());
+    // No Sapling spends, Sapling outputs, or JoinSplits.
+    bytes.extend_from_slice(&[0, 0, 0]);
+    Transaction::read(&bytes[..], BranchId::Sapling).unwrap()
+}
+
+fn push_transparent_bundle(
+    bytes: &mut Vec<u8>,
+    prevout: OutPoint,
+    recipient: TransparentAddress,
+    value: u64,
+) {
     bytes.push(1);
     bytes.extend_from_slice(prevout.hash());
     bytes.extend_from_slice(&prevout.n().to_le_bytes());
@@ -24,8 +57,6 @@ fn legacy_transaction(prevout: OutPoint, recipient: TransparentAddress, value: u
     let script: Script = recipient.script().into();
     bytes.push(script.0 .0.len() as u8);
     bytes.extend_from_slice(&script.0 .0);
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    Transaction::read(&bytes[..], BranchId::Sprout).unwrap()
 }
 
 fn history(txs: Vec<RawTransaction>) -> ephemeral_checks::History {
@@ -92,6 +123,61 @@ impl Wallet {
             Some(BlockHeight::from_u32(TIP - 50)),
         )
         .unwrap();
+    }
+
+    /// Records a first leg that spends a wallet output. The backend then holds
+    /// its ephemeral output until it is seen unspent past the leg's expiry.
+    fn fund_first_leg(&mut self, address: TransparentAddress) -> Transaction {
+        let external = self.external_address();
+        let funding = legacy_transaction(OutPoint::new([7; 32], 0), external, 60_000);
+        decrypt_and_store_transaction(
+            &self.network,
+            &mut self.db,
+            &funding,
+            Some(BlockHeight::from_u32(TIP - 60)),
+        )
+        .unwrap();
+        let first_leg = expiring_transaction(
+            OutPoint::new(*funding.txid().as_ref(), 0),
+            address,
+            50_000,
+            FIRST_LEG_EXPIRY,
+        );
+        decrypt_and_store_transaction(
+            &self.network,
+            &mut self.db,
+            &first_leg,
+            Some(BlockHeight::from_u32(TIP - 50)),
+        )
+        .unwrap();
+        first_leg
+    }
+
+    fn external_address(&self) -> TransparentAddress {
+        let conn = rusqlite::Connection::open(&self.path).unwrap();
+        let address: String = conn
+            .query_row(
+                "SELECT cached_transparent_receiver_address FROM addresses
+                 WHERE key_scope = 0 AND cached_transparent_receiver_address IS NOT NULL
+                 ORDER BY transparent_child_index LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        TransparentAddress::decode(&self.network, &address).unwrap()
+    }
+
+    fn spendable_value(&self, address: &TransparentAddress) -> u64 {
+        let account = self.db.get_account_ids().unwrap()[0];
+        self.db
+            .get_transparent_balances(
+                account,
+                BlockHeight::from_u32(TIP + 1).into(),
+                ConfirmationsPolicy::MIN,
+            )
+            .unwrap()
+            .get(address)
+            .map_or(0, |(_, balance)| u64::from(balance.spendable_value()))
     }
 
     fn set_check_time(&self, address: &TransparentAddress, at: SystemTime) {
@@ -452,4 +538,22 @@ async fn transactions_stored_before_a_stream_error_are_reported() {
         w.request_at(&used).unwrap() > now,
         "failed address deferred"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_check_that_makes_a_first_leg_output_spendable_is_reported() {
+    // The second leg was rejected, so the wallet never stored it.
+    let mut w = wallet();
+    let used = w.ephemeral[0];
+    let first_leg = w.fund_first_leg(used);
+    assert_eq!(w.spendable_value(&used), 0);
+    let now = SystemTime::now();
+    w.set_check_time(&used, now - Duration::from_secs(60));
+
+    let fetched = Cell::new(Vec::new());
+    assert!(
+        w.check(now, vec![raw(&first_leg, TIP - 50)], &fetched)
+            .await
+    );
+    assert_eq!(w.spendable_value(&used), 50_000);
 }

@@ -145,9 +145,7 @@ where
         return Ok(());
     }
 
-    // Also catches outputs newly recognized in transactions the wallet had.
-    *changed = address_activity(db_path, &address)? != before;
-    with_wallet_db_write_lock(
+    let completed = with_wallet_db_write_lock(
         "sync_engine.ephemeral_checks.notify_address_checked",
         || {
             db.notify_address_checked(request, tip)?;
@@ -155,7 +153,11 @@ where
             db.schedule_next_check(&checked, CHECK_INTERVAL_SECS)
         },
     )
-    .map_err(|e| SyncError::db(format!("complete ephemeral check: {e}")))?;
+    .map_err(|e| SyncError::db(format!("complete ephemeral check: {e}")));
+    // Compared after the notification, which can make an output spendable.
+    // Also catches outputs newly recognized in transactions the wallet had.
+    *changed = address_activity(db_path, &address)? != before;
+    completed?;
 
     if due.is_empty() {
         reschedule(db)?;
@@ -163,19 +165,31 @@ where
     Ok(())
 }
 
-/// Outputs the wallet knows at `address` and how many of them it saw spent.
-fn address_activity(db_path: &str, address: &str) -> Result<(i64, i64), SyncError> {
+/// Outputs the wallet knows at `address`, how many of them it saw spent, and
+/// how many wallet-funded ones it saw unspent past their transaction's expiry,
+/// the point at which the backend lets it spend them.
+fn address_activity(db_path: &str, address: &str) -> Result<(i64, i64, i64), SyncError> {
     let conn = open_readonly_conn_with_timeout(db_path, Some(SYNC_DB_BUSY_TIMEOUT))
         .map_err(SyncError::db)?;
     conn.query_row(
-        "SELECT COUNT(DISTINCT tro.id), COUNT(s.transaction_id)
+        "SELECT COUNT(DISTINCT tro.id), COUNT(s.transaction_id),
+                COUNT(DISTINCT CASE
+                    WHEN tro.max_observed_unspent_height > t.expiry_height
+                     AND EXISTS (
+                         SELECT 1 FROM v_received_output_spends ros
+                         WHERE ros.transaction_id = t.id_tx
+                           AND ros.account_id = tro.account_id
+                     )
+                    THEN tro.id
+                END)
          FROM addresses a
          JOIN transparent_received_outputs tro ON tro.address_id = a.id
+         JOIN transactions t ON t.id_tx = tro.transaction_id
          LEFT JOIN transparent_received_output_spends s
              ON s.transparent_received_output_id = tro.id
          WHERE a.cached_transparent_receiver_address = ?1",
         [address],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )
     .map_err(|e| SyncError::db(format!("read ephemeral address activity: {e}")))
 }
