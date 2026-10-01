@@ -109,6 +109,132 @@ void main() {
   });
 
   test(
+    'existing wallet users can request on their first launch after usage',
+    () async {
+      store.value = const AppReviewHistory();
+      await controller.recordLaunch(hadWalletAtStartup: true);
+      expect(store.value.launches, 1);
+      expect(store.value.existingUser, isTrue);
+      await controller.requestIfDue(() => true);
+      expect(native.requests, 0);
+      controller.recordUse();
+      await controller.requestIfDue(() => false);
+      expect(native.requests, 0);
+      await controller.requestIfDue(() => true);
+      expect(native.requests, 1);
+      expect(
+        AppReviewHistory.decode(store.value.encode()).existingUser,
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'new wallet creation does not promote a new installation on restart',
+    () async {
+      store.value = const AppReviewHistory();
+      await controller.recordLaunch(hadWalletAtStartup: false);
+      await controller.recordLaunch(hadWalletAtStartup: true);
+      expect(store.value.existingUser, isFalse);
+      store.value = AppReviewHistory.decode(store.value.encode());
+      final nextProcess = AppReviewController(store: store, native: native);
+      addTearDown(nextProcess.dispose);
+      await nextProcess.recordLaunch(hadWalletAtStartup: true);
+      nextProcess.recordUse();
+      await nextProcess.requestIfDue(() => true);
+      expect(store.value.launches, 2);
+      expect(store.value.existingUser, isFalse);
+      expect(native.requests, 0);
+      final thirdProcess = AppReviewController(store: store, native: native);
+      addTearDown(thirdProcess.dispose);
+      await thirdProcess.recordLaunch(hadWalletAtStartup: true);
+      thirdProcess.recordUse();
+      await thirdProcess.requestIfDue(() => true);
+      expect(native.requests, 1);
+      expect(store.value.existingUser, isFalse);
+    },
+  );
+
+  test(
+    'existing users retain the seven-day cooldown and two-attempt limit',
+    () async {
+      store.value = const AppReviewHistory();
+      await controller.recordLaunch(hadWalletAtStartup: true);
+      controller.recordUse();
+      await controller.requestIfDue(() => true);
+      now = now
+          .add(const Duration(days: 7))
+          .subtract(const Duration(milliseconds: 1));
+      controller.recordUse();
+      await controller.requestIfDue(() => true);
+      expect(native.requests, 1);
+      now = now.add(const Duration(milliseconds: 1));
+      await controller.requestIfDue(() => true);
+      expect(native.requests, 2);
+      now = now.add(const Duration(days: 400));
+      controller.recordUse();
+      await controller.requestIfDue(() => true);
+      expect(native.requests, 2);
+    },
+  );
+
+  test(
+    'legacy history is classified without resetting attempts or dates',
+    () async {
+      store.value = AppReviewHistory.decode(
+        '{"launches":1,"requests":1,"lastRequest":"2026-09-30T00:00:00Z"}',
+      );
+      final lastRequest = store.value.lastRequest;
+      await controller.recordLaunch(hadWalletAtStartup: true);
+      expect(store.value.existingUser, isTrue);
+      expect(store.value.requests, 1);
+      expect(store.value.lastRequest, lastRequest);
+      controller.recordUse();
+      await controller.requestIfDue(() => true);
+      expect(native.requests, 0);
+      now = lastRequest!.add(const Duration(days: 7));
+      await controller.requestIfDue(() => true);
+      expect(native.requests, 1);
+      expect(store.value.requests, 2);
+    },
+  );
+
+  test(
+    'stored existing-user decision survives wallet removal and restart',
+    () async {
+      store.value = const AppReviewHistory(existingUser: true, launches: 1);
+      await controller.recordLaunch(hadWalletAtStartup: false);
+      controller.recordUse();
+      await controller.requestIfDue(() => true);
+      expect(native.requests, 1);
+      expect(store.value.existingUser, isTrue);
+    },
+  );
+
+  test(
+    'legacy exhausted and damaged histories cannot receive a new budget',
+    () async {
+      for (final value in [
+        '{"launches":1,"requests":2,"lastRequest":"2026-09-01T00:00:00Z"}',
+        '{"launches":1,"requests":0,"existingUser":"yes"}',
+        'broken',
+      ]) {
+        final historyStore = MemoryReviewStore(AppReviewHistory.decode(value));
+        final nextProcess = AppReviewController(
+          store: historyStore,
+          native: native,
+        );
+        await nextProcess.recordLaunch(hadWalletAtStartup: true);
+        nextProcess.recordUse();
+        await nextProcess.requestIfDue(() => true);
+        expect(historyStore.value.requests, 2);
+        expect(native.requests, 0);
+        nextProcess.dispose();
+      }
+    },
+  );
+
+  test(
     'two API attempts total, second at seven days with renewed usage',
     () async {
       await controller.recordLaunch();

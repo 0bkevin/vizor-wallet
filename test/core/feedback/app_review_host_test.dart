@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:zcash_wallet/src/core/feedback/app_review.dart';
@@ -17,7 +18,10 @@ void main() {
   late ValueNotifier<bool> safe;
   late ScrollController scroll;
 
-  Future<void> mount(WidgetTester tester) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    bool hadWalletAtStartup = false,
+  }) async {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpWidget(
       MaterialApp.router(
@@ -30,6 +34,7 @@ void main() {
             observer: observer,
             safe: safeValue,
             readSafety: () => safe.value,
+            hadWalletAtStartup: hadWalletAtStartup,
             child: child!,
           ),
         ),
@@ -148,6 +153,66 @@ void main() {
     safe.dispose();
     scroll.dispose();
   });
+
+  testWidgets('existing users request on first launch only after home usage', (
+    tester,
+  ) async {
+    (controller.store as MemoryReviewStore).value = const AppReviewHistory();
+    await mount(tester, hadWalletAtStartup: true);
+    await idle(tester);
+    expect(controller.history.launches, 1);
+    expect(controller.history.existingUser, isTrue);
+    expect(native.requests, 0);
+    await tester.tap(find.text('Settings tab'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Home tab'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 1000));
+    expect(native.requests, 0);
+    await tester.pump(const Duration(milliseconds: 1000));
+    await tester.pump();
+    expect(native.requests, 1);
+  });
+
+  testWidgets(
+    'blocked startup leaves classification untouched until recovery',
+    (tester) async {
+      (controller.store as MemoryReviewStore).value = const AppReviewHistory();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      Widget app(bool? startupWallet) => ProviderScope(
+        overrides: [
+          appReviewEnabledProvider.overrideWithValue(true),
+          appReviewStartupWalletProvider.overrideWithValue(startupWallet),
+          appReviewControllerProvider.overrideWithValue(controller),
+          appReviewRouteObserverProvider.overrideWithValue(observer),
+          appReviewSurfaceSafeProvider.overrideWithValue(true),
+        ],
+        child: MaterialApp.router(
+          routerConfig: router,
+          builder: (_, child) => AppReviewHost(router: router, child: child!),
+        ),
+      );
+      await tester.pumpWidget(app(null));
+      await tester.pumpAndSettle();
+      expect((controller.store as MemoryReviewStore).value.launches, 0);
+      expect(
+        (controller.store as MemoryReviewStore).value.existingUser,
+        isNull,
+      );
+      expect(native.preparations, 0);
+      await tester.pumpWidget(app(true));
+      await tester.pumpAndSettle();
+      expect(controller.history.launches, 1);
+      expect(controller.history.existingUser, isTrue);
+      expect(native.requests, 0);
+      await tester.tap(find.text('Settings tab'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Home tab'));
+      await tester.pumpAndSettle();
+      await idle(tester);
+      expect(native.requests, 1);
+    },
+  );
 
   testWidgets('no prompt merely from home, balance toggle or account picker', (
     tester,

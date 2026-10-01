@@ -81,12 +81,15 @@ class AppReviewHost extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if (!ref.watch(appReviewEnabledProvider)) return child;
+    final hadWalletAtStartup = ref.watch(appReviewStartupWalletProvider);
+    if (hadWalletAtStartup == null) return child;
     return AppReviewInteractionHost(
       router: router,
       controller: ref.watch(appReviewControllerProvider),
       observer: ref.watch(appReviewRouteObserverProvider),
       safe: ref.watch(appReviewSurfaceSafeProvider),
       readSafety: () => ref.read(appReviewSurfaceSafeProvider),
+      hadWalletAtStartup: hadWalletAtStartup,
       child: child,
     );
   }
@@ -100,6 +103,7 @@ class AppReviewInteractionHost extends StatefulWidget {
     required this.safe,
     required this.readSafety,
     required this.child,
+    this.hadWalletAtStartup = false,
     super.key,
   });
   final GoRouter router;
@@ -109,6 +113,7 @@ class AppReviewInteractionHost extends StatefulWidget {
   // Async continuations can run before the next frame updates [safe].
   final bool Function() readSafety;
   final Widget child;
+  final bool hadWalletAtStartup;
 
   @override
   State<AppReviewInteractionHost> createState() =>
@@ -148,7 +153,11 @@ class _AppReviewInteractionHostState extends State<AppReviewInteractionHost>
 
   void _foreground() {
     if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
-      unawaited(widget.controller.recordLaunch());
+      unawaited(
+        widget.controller.recordLaunch(
+          hadWalletAtStartup: widget.hadWalletAtStartup,
+        ),
+      );
     }
     _changed();
   }

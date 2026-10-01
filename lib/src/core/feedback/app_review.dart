@@ -19,14 +19,18 @@ class AppReviewHistory {
     this.launches = 0,
     this.requests = 0,
     this.lastRequest,
+    this.existingUser,
   });
 
   final int launches;
   final int requests;
   final DateTime? lastRequest;
+  // Null denotes an unclassified installation, including legacy v1 history.
+  // Once persisted, wallet creation/deletion never changes this decision.
+  final bool? existingUser;
 
   bool isDue(DateTime now) =>
-      launches >= 3 &&
+      (existingUser == true || launches >= 3) &&
       (requests == 0 ||
           (requests == 1 &&
               lastRequest != null &&
@@ -36,6 +40,7 @@ class AppReviewHistory {
     'launches': launches,
     'requests': requests,
     'lastRequest': lastRequest?.toUtc().toIso8601String(),
+    'existingUser': existingUser,
   });
 
   static AppReviewHistory decode(String? value) {
@@ -45,6 +50,7 @@ class AppReviewHistory {
       final launches = data['launches'] as int;
       final requests = data['requests'] as int;
       final last = data['lastRequest'] as String?;
+      final existingUser = data['existingUser'] as bool?;
       if (launches < 0 ||
           requests < 0 ||
           requests > 2 ||
@@ -55,6 +61,7 @@ class AppReviewHistory {
         launches: launches,
         requests: requests,
         lastRequest: last == null ? null : DateTime.parse(last),
+        existingUser: existingUser,
       );
     } catch (_) {
       // Damaged history must not start a fresh request budget.
@@ -138,15 +145,17 @@ class AppReviewController extends ChangeNotifier {
       !_disposed && _ready && _used && !_requesting && history.isDue(now());
   bool get isBusy => _busy > 0;
 
-  Future<void> recordLaunch() => _launch ??= _recordLaunch();
+  Future<void> recordLaunch({bool hadWalletAtStartup = false}) =>
+      _launch ??= _recordLaunch(hadWalletAtStartup);
 
-  Future<void> _recordLaunch() async {
+  Future<void> _recordLaunch(bool hadWalletAtStartup) async {
     try {
       final previous = await store.load();
       final next = AppReviewHistory(
         launches: previous.launches < 3 ? previous.launches + 1 : 3,
         requests: previous.requests,
         lastRequest: previous.lastRequest,
+        existingUser: previous.existingUser ?? hadWalletAtStartup,
       );
       await store.save(next);
       history = next;
@@ -213,6 +222,7 @@ class AppReviewController extends ChangeNotifier {
         launches: previous.launches,
         requests: previous.requests + 1,
         lastRequest: now(),
+        existingUser: previous.existingUser,
       );
       await store.save(next);
       history = next;
@@ -253,6 +263,9 @@ class AppReviewController extends ChangeNotifier {
 // Preview and test app builders opt in explicitly; production supplies the
 // same process-owned controller across ProviderScope bootstrap retries.
 final appReviewEnabledProvider = Provider<bool>((ref) => false);
+// Production supplies the immutable bootstrap snapshot. Null means startup
+// failed, so review history must wait for a successful bootstrap retry.
+final appReviewStartupWalletProvider = Provider<bool?>((ref) => false);
 final appReviewControllerProvider = Provider<AppReviewController>((ref) {
   final controller = AppReviewController(
     store: PreferencesAppReviewStore(),

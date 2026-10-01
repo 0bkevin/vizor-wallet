@@ -132,6 +132,14 @@ Google Play review SDK and implementation are excluded from the build. iOS
 reviews and desktop behavior are unaffected. F-Droid's wrapper always passes
 `--degoogled` to match deployment's direct APK build inputs.
 
+Mobile review eligibility is classified once from the first successful startup
+snapshot and persisted in `vizor_app_review_history_v1`. Existing wallet users
+skip the three-launch wait; new users retain it even after creating a wallet.
+Both require explicit usage and two idle seconds on home, with at most two API
+attempts and a seven-day retry interval. Legacy history keeps its attempt budget
+and dates when the classification field is added. Blocked startup must not be
+classified as a new user; retry recovery supplies the successful snapshot.
+
 ## Deep-link Host (VIZOR_DEEPLINK_BASE_URL)
 
 The HTTPS origin Vizor claims for incoming links has **one** knob on

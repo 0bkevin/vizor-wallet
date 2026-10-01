@@ -287,6 +287,10 @@ Future<BootstrappedZcashWalletApp> buildProductionZcashWalletApp({
       appReviewControllerProvider.overrideWithValue(
         _productionAppReviewController,
       ),
+      appReviewStartupWalletProvider.overrideWith((ref) {
+        final startup = ref.watch(appBootstrapProvider);
+        return startup.hasBlockingFailure ? null : startup.hasWallet;
+      }),
       appPasswordInputSourceProvider.overrideWith((ref) {
         final service = AppPasswordInputSource.production();
         ref.onDispose(service.dispose);
