@@ -49,6 +49,9 @@ mod address_history;
 mod block_source;
 mod claim_roots;
 pub(crate) mod enhancement;
+mod ephemeral_checks;
+#[cfg(test)]
+mod ephemeral_checks_tests;
 mod error;
 pub(crate) mod ledger_discovery;
 mod lwd;
@@ -4629,6 +4632,43 @@ async fn run_sync_impl(
             // running. Re-emit completion even after a terminal partial
             // failure so Dart refreshes whichever account is active now from
             // every output that was committed by an earlier successful group.
+            progress_fn(SyncProgressEvent {
+                scanned_height: final_scanned_height,
+                chain_tip_height: final_tip_height,
+                percentage: 1.0,
+                display_target_percentage: 1.0,
+                display_target_blocks: 0,
+                is_syncing: false,
+                is_complete: true,
+                has_new_tx: true,
+                phase_completed_units: 0,
+                phase_total_units: 0,
+                phase: String::new(),
+            });
+        }
+    }
+
+    if !should_exit() {
+        let mut changed = false;
+        if let Err(error) = ephemeral_checks::run(
+            lightwalletd_url,
+            &mut db,
+            db_data_path,
+            network,
+            BlockHeight::from_u32(final_tip_height as u32),
+            &mut changed,
+            &should_exit,
+        )
+        .await
+        {
+            log::warn!(
+                "[{}] sync: ephemeral address check failed; it will retry on a later sync: {}",
+                elapsed(),
+                error,
+            );
+        }
+        // Refresh even after a failure that followed stored transactions.
+        if changed && !should_exit() {
             progress_fn(SyncProgressEvent {
                 scanned_height: final_scanned_height,
                 chain_tip_height: final_tip_height,
