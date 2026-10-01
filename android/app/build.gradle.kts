@@ -171,6 +171,7 @@ flutter {
 }
 
 dependencies {
+    implementation("com.google.android.play:review:2.0.2")
     implementation("io.github.ledgerhq:device-management-kit:0.0.4")
     // DMK exposes OpenApplicationDeviceAction's FlowRedux supertype publicly.
     implementation("com.freeletics.flowredux:flowredux:1.2.2")
