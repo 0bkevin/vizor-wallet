@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../import/desktop_import_navigation.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_icon.dart';
@@ -98,12 +97,7 @@ class _ButtonStack extends StatelessWidget {
     return AppButton(
       onPressed: () {
         ref.read(keystoneOnboardingProvider.notifier).resetScan();
-        context.go(
-          desktopImportLocation(
-            context,
-            KeystoneOnboardingStep.scanQrCode.routePath,
-          ),
-        );
+        context.go(KeystoneOnboardingStep.scanQrCode.routePath);
       },
       variant: AppButtonVariant.primary,
       minWidth: _buttonMinWidth,
