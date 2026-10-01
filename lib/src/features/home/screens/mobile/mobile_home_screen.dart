@@ -823,7 +823,7 @@ class _HomeContent extends ConsumerStatefulWidget {
 
 class _HomeContentState extends ConsumerState<_HomeContent> {
   void _expectReviewVisit(String path) {
-    ref.read(appReviewControllerProvider).expectVisit(path);
+    expectAppReviewVisit(ref, path);
   }
 
   Future<T?> _pushUsedScreen<T>(String path, {Object? extra}) {
@@ -900,16 +900,15 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
         privacyModeEnabled: privacyModeEnabled,
         dateOnlyTimestamp: true,
         onTap: () => unawaited(
-          ref
-              .read(appReviewControllerProvider)
-              .duringBusy(
-                () => _openTransactionStatus(
-                  context,
-                  ref,
-                  transaction,
-                  giftCard: giftCard,
-                ),
-              ),
+          duringAppReviewBusy(
+            ref,
+            () => _openTransactionStatus(
+              context,
+              ref,
+              transaction,
+              giftCard: giftCard,
+            ),
+          ),
         ),
       ),
     );
@@ -1185,9 +1184,7 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
                 if (target != null) context.push(target);
               },
               onShieldBalancePressed: () => unawaited(
-                ref
-                    .read(appReviewControllerProvider)
-                    .duringBusy(_shieldTransparentBalance),
+                duringAppReviewBusy(ref, _shieldTransparentBalance),
               ),
             ),
             const SizedBox(height: AppSpacing.s),
@@ -1246,9 +1243,7 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
                           height: _mobileHomeActionButtonHeight,
                           contentPadding: EdgeInsets.zero,
                           variant: AppButtonVariant.secondary,
-                          onPressed: () => ref
-                              .read(appReviewControllerProvider)
-                              .duringBusy(_openPay),
+                          onPressed: () => duringAppReviewBusy(ref, _openPay),
                           child: const _ButtonIcon(AppIcons.paid),
                         ),
                       ),

@@ -730,7 +730,7 @@ class _MobileTabShell extends ConsumerWidget {
           // the active tab — that just resets it to root.
           if (targetBranchIndex != currentBranchIndex) {
             if (targetTab.path != "/home") {
-              ref.read(appReviewControllerProvider).expectVisit(targetTab.path);
+              expectAppReviewVisit(ref, targetTab.path);
             }
             ref
                 .read(mobilePreviousTabPathProvider.notifier)

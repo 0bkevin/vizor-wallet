@@ -5,6 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/google_play_config.dart';
+import '../layout/app_form_factor.dart';
+
+bool isNativeAppReviewEnabled({required bool isIOS, required bool isAndroid}) =>
+    kAppFormFactor == AppFormFactor.mobile &&
+    (isIOS || (isAndroid && !kVizorDegoogled));
+
 /// Installation-wide history. A request is an API attempt, never a confirmed
 /// impression or review: neither store exposes those outcomes.
 class AppReviewHistory {
@@ -254,3 +261,17 @@ final appReviewControllerProvider = Provider<AppReviewController>((ref) {
   ref.onDispose(controller.dispose);
   return controller;
 });
+
+void expectAppReviewVisit(WidgetRef ref, String path) {
+  if (ref.read(appReviewEnabledProvider)) {
+    ref.read(appReviewControllerProvider).expectVisit(path);
+  }
+}
+
+Future<T> duringAppReviewBusy<T>(
+  WidgetRef ref,
+  Future<T> Function() action,
+) async {
+  if (!ref.read(appReviewEnabledProvider)) return action();
+  return ref.read(appReviewControllerProvider).duringBusy(action);
+}

@@ -122,6 +122,16 @@ Untagged tests may run in either lane and must be lane-agnostic:
   `fvm flutter run -t lib/widgetbook.dart --dart-define=VIZOR_FORM_FACTOR=mobile`.
   Only `lib/main.dart` asserts the match.
 
+## Google Play opt-out (VIZOR_DEGOOGLED)
+
+Android builds include Google Play integrations by default. Direct APK and
+F-Droid builds explicitly pass `--dart-define=VIZOR_DEGOOGLED=true`; the
+reproducible APK builder exposes this as `--degoogled`. Dart and Gradle read
+the same define. When enabled, Android review scheduling is disabled and the
+Google Play review SDK and implementation are excluded from the build. iOS
+reviews and desktop behavior are unaffected. F-Droid's wrapper always passes
+`--degoogled` to match deployment's direct APK build inputs.
+
 ## Deep-link Host (VIZOR_DEEPLINK_BASE_URL)
 
 The HTTPS origin Vizor claims for incoming links has **one** knob on

@@ -279,8 +279,10 @@ Future<BootstrappedZcashWalletApp> buildProductionZcashWalletApp({
     overrides: [
       capsLockMonitoringEnabledProvider.overrideWithValue(true),
       appReviewEnabledProvider.overrideWithValue(
-        kAppFormFactor == AppFormFactor.mobile &&
-            (Platform.isIOS || Platform.isAndroid),
+        isNativeAppReviewEnabled(
+          isIOS: Platform.isIOS,
+          isAndroid: Platform.isAndroid,
+        ),
       ),
       appReviewControllerProvider.overrideWithValue(
         _productionAppReviewController,
