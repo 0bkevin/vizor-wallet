@@ -19,17 +19,28 @@ void main() {
   setUpAll(() => RustLib.initMock(api: _RustFake()));
   tearDownAll(RustLib.dispose);
 
-  for (final hasWallet in [false, true]) {
-    final entry = hasWallet ? 'add account' : 'first wallet';
-    for (final flow in [
-      'import_wallet',
-      'connect_keystone',
-      'connect_ledger',
-    ]) {
+  for (final scenario in [
+    (hasWallet: false, applyRedirect: true),
+    (hasWallet: true, applyRedirect: true),
+    (hasWallet: false, applyRedirect: false),
+  ]) {
+    final hasWallet = scenario.hasWallet;
+    final entry = hasWallet
+        ? 'add account'
+        : scenario.applyRedirect
+        ? 'first wallet'
+        : 'first wallet without redirect guard';
+    for (final flow
+        in scenario.applyRedirect
+            ? ['import_wallet', 'connect_keystone', 'connect_ledger']
+            : ['connect_ledger']) {
       testWidgets('$entry $flow returns to its entry screen', (tester) async {
         await tester.binding.setSurfaceSize(const Size(1280, 900));
         addTearDown(() => tester.binding.setSurfaceSize(null));
-        final harness = _Harness(hasWallet: hasWallet);
+        final harness = _Harness(
+          hasWallet: hasWallet,
+          applyRedirect: scenario.applyRedirect,
+        );
         addTearDown(() {
           harness.router.dispose();
           harness.container.dispose();
@@ -47,15 +58,13 @@ void main() {
         expect(harness.router.canPop(), isFalse);
         final back = find.byType(AppBackLink);
         expect(back, findsOneWidget);
-        if (flow != 'connect_ledger') {
-          expect(
-            find.descendant(
-              of: back,
-              matching: find.text(hasWallet ? 'Add account' : 'Welcome'),
-            ),
-            findsOneWidget,
-          );
-        }
+        expect(
+          find.descendant(
+            of: back,
+            matching: find.text(hasWallet ? 'Add account' : 'Welcome'),
+          ),
+          findsOneWidget,
+        );
         await tester.tap(back);
         await tester.pumpAndSettle();
 
@@ -79,7 +88,7 @@ void main() {
 final _routes = Provider(appDesktopOnboardingRoutes);
 
 class _Harness {
-  _Harness({required bool hasWallet}) {
+  _Harness({required bool hasWallet, required bool applyRedirect}) {
     container = ProviderContainer(
       overrides: [
         appBootstrapProvider.overrideWithValue(AppBootstrapState.empty),
@@ -95,11 +104,13 @@ class _Harness {
     final routerProvider = Provider(
       (ref) => GoRouter(
         initialLocation: hasWallet ? '/accounts' : '/welcome',
-        redirect: (_, state) => appRedirect(
-          ref: ref,
-          bootstrap: AppBootstrapState.empty,
-          state: state,
-        ),
+        redirect: applyRedirect
+            ? (_, state) => appRedirect(
+                ref: ref,
+                bootstrap: AppBootstrapState.empty,
+                state: state,
+              )
+            : null,
         routes: [
           ...ref.read(_routes),
           GoRoute(

@@ -648,7 +648,9 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
       key: state.pageKey,
       transitionDuration: kOnboardingForwardDuration,
       reverseTransitionDuration: kOnboardingReverseDuration,
-      child: const LedgerConnectScreen(),
+      child: LedgerConnectScreen(
+        backTarget: _desktopOnboardingEntryBackTarget(ref),
+      ),
       transitionsBuilder: _onboardingFadeTransition,
     ),
   ),
