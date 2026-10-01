@@ -152,6 +152,25 @@ abstract interface class PaymentLinkOperations {
     bool allowLongSync = false,
   });
 
+  /// Checks a card without creating or choosing a receiving account.
+  Future<PaymentLinkClaimInspection> inspectClaim(
+    VizorPaymentLink link, {
+    bool allowLongSync = false,
+  });
+
+  /// Re-estimates a checked card for the explicitly selected receiving account.
+  ///
+  /// Uses the existing inspection database without another sync. Inspection
+  /// readiness is a snapshot, not a guarantee that a later claim will succeed.
+  /// See docs/plans/mobile-gift-claim-execution-policy.md for the onboarding
+  /// handoff and the existing Received-card failure/recovery surface.
+  Future<PaymentLinkClaimSession> bindClaimDestination(
+    PaymentLinkClaimInspection inspection, {
+    required String destinationAccountUuid,
+  });
+
+  Future<void> discardClaimInspection(PaymentLinkClaimInspection inspection);
+
   Future<PaymentLinkClaimResult> claimPreparedLink(
     PaymentLinkClaimSession session,
   );
@@ -275,6 +294,34 @@ abstract interface class PaymentLinkBatchOperations {
 final paymentLinkBatchOperationsProvider = Provider<PaymentLinkBatchOperations>(
   (ref) => ref.watch(paymentLinkServiceProvider),
 );
+
+/// A scanned card with a provisional fee estimate and no receiving account.
+/// Binding re-estimates for the actual destination before it can be submitted.
+class PaymentLinkClaimInspection {
+  const PaymentLinkClaimInspection({
+    required this.link,
+    required this.directory,
+    required this.dbPath,
+    required this.accountUuid,
+    required this.totalZatoshi,
+    required this.claimableZatoshi,
+    required this.feeZatoshi,
+    required this.fundingConfirmationCount,
+    required this.waitingForFundingConfirmations,
+    required this.availability,
+  });
+
+  final VizorPaymentLink link;
+  final Directory directory;
+  final String dbPath;
+  final String accountUuid;
+  final BigInt totalZatoshi;
+  final BigInt claimableZatoshi;
+  final BigInt feeZatoshi;
+  final int fundingConfirmationCount;
+  final bool waitingForFundingConfirmations;
+  final PaymentLinkAvailability availability;
+}
 
 class PaymentLinkClaimSession {
   const PaymentLinkClaimSession({
@@ -1341,22 +1388,134 @@ class PaymentLinkService
     _ref
         .read(accountProvider.notifier)
         .updateActiveAddressForAccount(receiverAccountUuid, receiverAddress);
-    return _prepareSpend(
-      link: link,
+    await _requireShieldedAddress(receiverAddress);
+    // Existing claims estimate once, directly against their receiving account.
+    final inspection = await _inspectClaim(
+      link,
+      allowLongSync: allowLongSync,
+      estimateDestinationAddress: receiverAddress,
+    );
+    return _sessionFromInspection(
+      inspection,
       destinationAddress: receiverAddress,
       destinationAccountUuid: receiverAccountUuid,
-      allowLongSync: allowLongSync,
+      claimableZatoshi: inspection.claimableZatoshi,
+      feeZatoshi: inspection.feeZatoshi,
     );
   }
 
-  Future<PaymentLinkClaimSession> _prepareSpend({
-    required VizorPaymentLink link,
+  @override
+  Future<PaymentLinkClaimInspection> inspectClaim(
+    VizorPaymentLink link, {
+    bool allowLongSync = false,
+  }) async {
+    _requireWalletUnlocked();
+    return _inspectClaim(link, allowLongSync: allowLongSync);
+  }
+
+  @override
+  Future<PaymentLinkClaimSession> bindClaimDestination(
+    PaymentLinkClaimInspection inspection, {
+    required String destinationAccountUuid,
+  }) async {
+    _requireWalletUnlocked();
+    final endpoint = _ref.read(rpcEndpointFailoverProvider).current;
+    if (inspection.link.network != endpoint.networkName) {
+      throw PaymentLinkNetworkMismatchException(
+        linkNetwork: inspection.link.network,
+        walletNetwork: endpoint.networkName,
+      );
+    }
+    final destinationAddress = await rust_wallet.getUnifiedAddress(
+      dbPath: await getWalletDbPath(),
+      network: endpoint.networkName,
+      accountUuid: destinationAccountUuid,
+    );
+    _requireWalletUnlocked();
+    if (destinationAddress.isEmpty) {
+      throw const PaymentLinkClaimDestinationChangedException();
+    }
+    await _requireShieldedAddress(destinationAddress);
+    if ((await _receivedStore.find(inspection.link.address))?.isClaimInFlight ??
+        false) {
+      throw const PaymentLinkClaimInFlightException();
+    }
+    // Intentionally do not resync here: account setup can outlast the preview,
+    // but binding does not add another scan to that path. Re-estimation uses
+    // the cached card state; submission can fail or still require confirmations.
+    // Once a claim is started, its saved card remains in My gift cards > Received
+    // for existing failure/recovery handling. Binding alone does not save it.
+    final estimate = await _estimateClaim(
+      dbPath: inspection.dbPath,
+      network: inspection.link.network,
+      accountUuid: inspection.accountUuid,
+      toAddress: destinationAddress,
+    );
+    _requireWalletUnlocked();
+    return _sessionFromInspection(
+      inspection,
+      destinationAddress: destinationAddress,
+      destinationAccountUuid: destinationAccountUuid,
+      claimableZatoshi: paymentLinkClaimableAmountZatoshi(
+        recipientAmountZatoshi: inspection.link.amountZatoshi,
+        maxSpendableZatoshi: estimate?.amountZatoshi ?? BigInt.zero,
+      ),
+      feeZatoshi: estimate?.feeZatoshi ?? BigInt.zero,
+    );
+  }
+
+  PaymentLinkClaimSession _sessionFromInspection(
+    PaymentLinkClaimInspection inspection, {
     required String destinationAddress,
     required String destinationAccountUuid,
+    required BigInt claimableZatoshi,
+    required BigInt feeZatoshi,
+  }) => PaymentLinkClaimSession(
+    link: inspection.link,
+    destinationAddress: destinationAddress,
+    destinationAccountUuid: destinationAccountUuid,
+    directory: inspection.directory,
+    dbPath: inspection.dbPath,
+    accountUuid: inspection.accountUuid,
+    totalZatoshi: inspection.totalZatoshi,
+    claimableZatoshi: claimableZatoshi,
+    feeZatoshi: feeZatoshi,
+    fundingConfirmationCount: inspection.fundingConfirmationCount,
+    waitingForFundingConfirmations: inspection.waitingForFundingConfirmations,
+    availability: claimableZatoshi > BigInt.zero
+        ? PaymentLinkAvailability.available
+        : inspection.availability == PaymentLinkAvailability.claimedElsewhere
+        ? PaymentLinkAvailability.claimedElsewhere
+        : PaymentLinkAvailability.noBalance,
+  );
+
+  Future<rust_sync.SendMaxEstimateResult?> _estimateClaim({
+    required String dbPath,
+    required String network,
+    required String accountUuid,
+    required String toAddress,
+  }) async {
+    try {
+      return await rust_sync.estimatePaymentLinkClaimMax(
+        dbPath: dbPath,
+        network: network,
+        accountUuid: accountUuid,
+        toAddress: toAddress,
+      );
+    } catch (error) {
+      if (!error.toString().toLowerCase().contains('insufficient balance')) {
+        rethrow;
+      }
+      return null;
+    }
+  }
+
+  Future<PaymentLinkClaimInspection> _inspectClaim(
+    VizorPaymentLink link, {
     required bool allowLongSync,
+    String? estimateDestinationAddress,
   }) async {
     log('PaymentLinkClaim: preparation started');
-    await _requireShieldedAddress(destinationAddress);
     final endpoint = _ref.read(rpcEndpointFailoverProvider).current;
     if (link.network != endpoint.networkName) {
       throw PaymentLinkNetworkMismatchException(
@@ -1472,26 +1631,18 @@ class PaymentLinkService
         network: endpoint.networkName,
         accountUuid: importedAccountUuid,
       );
-      var claimableZatoshi = BigInt.zero;
-      var feeZatoshi = BigInt.zero;
-      try {
-        final estimate = await rust_sync.estimatePaymentLinkClaimMax(
-          dbPath: tempWallet.dbPath,
-          network: endpoint.networkName,
-          accountUuid: importedAccountUuid,
-          toAddress: destinationAddress,
-        );
-        claimableZatoshi = paymentLinkClaimableAmountZatoshi(
-          recipientAmountZatoshi: link.amountZatoshi,
-          maxSpendableZatoshi: estimate.amountZatoshi,
-        );
-        feeZatoshi = estimate.feeZatoshi;
-      } catch (e) {
-        final message = e.toString().toLowerCase();
-        if (!message.contains('insufficient balance')) {
-          rethrow;
-        }
-      }
+      // Before wallet setup, use the card's own receiver only for the preview
+      // estimate. This address is never used as a submitted claim destination.
+      final estimate = await _estimateClaim(
+        dbPath: tempWallet.dbPath,
+        network: endpoint.networkName,
+        accountUuid: importedAccountUuid,
+        toAddress: estimateDestinationAddress ?? importedAddress,
+      );
+      final claimableZatoshi = paymentLinkClaimableAmountZatoshi(
+        recipientAmountZatoshi: link.amountZatoshi,
+        maxSpendableZatoshi: estimate?.amountZatoshi ?? BigInt.zero,
+      );
 
       final transactions = await rust_sync.getTransactionHistory(
         dbPath: tempWallet.dbPath,
@@ -1542,16 +1693,14 @@ class PaymentLinkService
         'confirmations=$fundingConfirmationCount',
       );
 
-      return PaymentLinkClaimSession(
+      return PaymentLinkClaimInspection(
         link: link,
-        destinationAddress: destinationAddress,
-        destinationAccountUuid: destinationAccountUuid,
         directory: tempWallet.directory,
         dbPath: tempWallet.dbPath,
         accountUuid: importedAccountUuid,
         totalZatoshi: balance.total,
         claimableZatoshi: claimableZatoshi,
-        feeZatoshi: feeZatoshi,
+        feeZatoshi: estimate?.feeZatoshi ?? BigInt.zero,
         fundingConfirmationCount: fundingConfirmationCount,
         waitingForFundingConfirmations: waitingForFundingConfirmations,
         availability: availability,
@@ -1780,6 +1929,25 @@ class PaymentLinkService
   }
 
   @override
+  Future<void> discardClaimInspection(
+    PaymentLinkClaimInspection inspection,
+  ) async {
+    await _claimWallet.cancelClaimSync(inspection.link);
+    // Locked storage cannot establish whether a saved card owns this wallet.
+    // TODO(gift onboarding): When wiring callers that can discard while locked,
+    // retain cleanup intent and retry the ownership check after unlock before
+    // deleting unsaved wallets. These guards preserve the DB without scheduling
+    // a retry; the normal first-wallet handoff must keep the inspected wallet.
+    if (_ref.read(appSecurityProvider).requiresUnlock) return;
+    // Only cards still retaining recovery material own a cached claim wallet.
+    final record = await _receivedStore.find(inspection.link.address);
+    if (record?.claimLink != null) return;
+    // The app may lock while the saved-card lookup is awaiting storage.
+    if (_ref.read(appSecurityProvider).requiresUnlock) return;
+    await _claimWallet.deleteDb(inspection.directory);
+  }
+
+  @override
   Future<void> keepReceivedLink(VizorPaymentLink link) {
     // No claim wallet exists yet, so only the record is persisted; tracked so
     // a wallet reset drains this write instead of racing it.
@@ -1795,7 +1963,13 @@ class PaymentLinkService
     return _ref.read(paymentLinkClaimCoordinatorProvider).trackRetention(
       () async {
         await _claimWallet.cancelClaimSync(session.link);
-        await _receivedStore.saveReady(session.link);
+        final record = await _receivedStore.saveReady(session.link);
+        // A stale screen can request retention after six-confirmation cleanup.
+        // Keep the receipt, but discard any newly recreated inspection wallet.
+        if (record.claimLink == null) {
+          await _claimWallet.deleteDb(session.directory);
+          return;
+        }
         await _receivedStore.setAvailability(
           session.link.address,
           session.availability,
