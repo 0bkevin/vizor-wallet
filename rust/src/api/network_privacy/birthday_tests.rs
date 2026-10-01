@@ -1,8 +1,11 @@
 //! Request-recording tests for the real birthday API, without external services.
 
 use super::*;
+#[cfg(not(ironwood_masquerade))]
 use prost::Message;
+#[cfg(not(ironwood_masquerade))]
 use std::sync::Arc;
+#[cfg(not(ironwood_masquerade))]
 use zcash_client_backend::proto::service::{BlockId, TreeState};
 
 #[cfg(not(ironwood_masquerade))]
@@ -21,7 +24,16 @@ impl Drop for FakeLwd {
 
 #[cfg(not(ironwood_masquerade))]
 impl FakeLwd {
-    async fn start(latest_status: u8, network: &str, tip: BirthdayAnchor) -> Self {
+    async fn start(latest_status: u8, network: &str, tip: BlockTimePoint) -> Self {
+        Self::start_with_block_height(latest_status, network, tip, tip.height).await
+    }
+
+    async fn start_with_block_height(
+        latest_status: u8,
+        network: &str,
+        tip: BlockTimePoint,
+        block_height: u64,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -70,7 +82,7 @@ impl FakeLwd {
                                     "GetBlock" if height == Some(tip.height) => (
                                         0,
                                         CompactBlock {
-                                            height: tip.height,
+                                            height: block_height,
                                             time: tip.time,
                                             ..Default::default()
                                         }
@@ -106,8 +118,8 @@ impl FakeLwd {
     }
 }
 
-fn tip() -> BirthdayAnchor {
-    BirthdayAnchor {
+fn tip() -> BlockTimePoint {
+    BlockTimePoint {
         height: 3_498_200,
         time: 1_790_527_223,
     }
@@ -125,7 +137,7 @@ async fn mainnet_birthday_with_metadata_needs_no_connection() {
     )
     .await
     .unwrap();
-    assert_eq!(height, 1_757_270);
+    assert_eq!(height, 1_757_200);
     let invalid = estimate_import_birthday_height(
         "not-a-lightwalletd-url".to_owned(),
         1_659_305_748,
@@ -136,6 +148,19 @@ async fn mainnet_birthday_with_metadata_needs_no_connection() {
     .await
     .unwrap_err();
     assert!(invalid.contains("predates Sapling"), "{invalid}");
+    let invalid = estimate_import_birthday_height(
+        "not-a-lightwalletd-url".to_owned(),
+        1_659_305_748,
+        true,
+        Some(u64::MAX),
+        Some(tip().time),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        invalid.contains("supported block height range"),
+        "{invalid}"
+    );
 }
 
 #[cfg(not(ironwood_masquerade))]
@@ -147,7 +172,7 @@ async fn mainnet_birthday_without_metadata_requests_only_public_tip() {
         estimate_import_birthday_height(server.url.clone(), 1_659_305_748, true, None, None)
             .await
             .unwrap();
-    assert_eq!(height, 1_757_270);
+    assert_eq!(height, 1_757_200);
     assert_eq!(
         *server.calls.lock().unwrap(),
         vec![("GetLatestTreeState".to_owned(), None)]
@@ -163,7 +188,7 @@ async fn mainnet_birthday_legacy_server_fetches_block_only_at_tip() {
         estimate_import_birthday_height(server.url.clone(), 1_659_305_748, true, None, None)
             .await
             .unwrap();
-    assert_eq!(height, 1_757_270);
+    assert_eq!(height, 1_757_200);
     assert_eq!(
         *server.calls.lock().unwrap(),
         vec![
@@ -197,7 +222,15 @@ async fn mainnet_birthday_metadata_is_reused_and_errors_do_not_search() {
     for (status, network, bad_tip) in [
         (14, "main", tip()),
         (0, "test", tip()),
-        (0, "main", BirthdayAnchor { time: 0, ..tip() }),
+        (0, "main", BlockTimePoint { time: 0, ..tip() }),
+        (
+            0,
+            "main",
+            BlockTimePoint {
+                time: tip().time - 1,
+                ..tip()
+            },
+        ),
     ] {
         let server = FakeLwd::start(status, network, bad_tip).await;
         assert!(get_import_birthday_metadata(server.url.clone(), true)
@@ -231,4 +264,24 @@ async fn mainnet_birthday_disabled_fast_path_uses_the_endpoint() {
     )
     .await
     .is_err());
+}
+
+#[cfg(not(ironwood_masquerade))]
+#[tokio::test]
+async fn mainnet_birthday_legacy_server_rejects_mismatched_tip_block() {
+    let _policy = crate::network_privacy::test_route_policy::lock_route_policy();
+    let server = FakeLwd::start_with_block_height(12, "main", tip(), tip().height - 1).await;
+    let error = get_import_birthday_metadata(server.url.clone(), true)
+        .await
+        .err()
+        .expect("a mismatched tip block must be rejected");
+    assert!(error.contains("endpoint returned height"), "{error}");
+    assert_eq!(
+        *server.calls.lock().unwrap(),
+        vec![
+            ("GetLatestTreeState".to_owned(), None),
+            ("GetLatestBlock".to_owned(), None),
+            ("GetBlock".to_owned(), Some(tip().height)),
+        ]
+    );
 }

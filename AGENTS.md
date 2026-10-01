@@ -165,20 +165,18 @@ Android and Dart: `--dart-define=VIZOR_DEEPLINK_BASE_URL` (default
   Dart's `classifyIncomingLink`, which drops unknown paths on the origin
   silently.
 
-## Mainnet Birthday Estimates
+## Mainnet Block-Time Table
 
-Date-to-height imports and seed-phrase height-to-date displays use the sparse
-mainnet anchors in `rust/src/wallet/birthday.rs`. Never verify a birthday-derived
-height with lightwalletd on mainnet. Imports reuse the screen's tip metadata or
-fetch only the public tip; displays use the scanned block time where available.
-The existing 15-day date-import margin stays in Dart. Direct height entry stays
-exact. Testnet, regtest, and Ironwood masquerade keep their network lookup.
+On mainnet, wallet birthday conversions (import date to height, seed-phrase
+screen height to date) never send lightwalletd a wallet-derived height. They
+read `rust/src/wallet/block_times/mainnet_data.rs`, a generated table of
+header times every 1,000 blocks. The only request left is the chain tip.
 
-Before a release, check interpolation errors against independent mainnet block
-times, including recent dates and an older tip snapshot. If needed, add or refresh
-one deep recent anchor after verifying its time against two independent endpoints.
-Keep the Sapling and Blossom anchors. Do not introduce a dense table or scheduled
-updates without a separate request. Sync's tree-state requests are unchanged.
+- The weekly `Update mainnet block times` workflow appends entries after two
+  endpoints agree, and opens a PR for a person to merge.
+- Bootstrap or refresh before a release cut with
+  `scripts/update-mainnet-block-times.py` (needs `grpcurl`); validate offline
+  with `--check`. Never edit the data file by hand.
 
 ## Editing Figma
 

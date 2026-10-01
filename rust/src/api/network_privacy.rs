@@ -14,7 +14,9 @@ use tokio::io::AsyncWriteExt;
 use tonic::Request;
 use zcash_client_backend::proto::{
     compact_formats::CompactBlock,
-    service::{compact_tx_streamer_client::CompactTxStreamerClient, BlockId, ChainSpec, Empty},
+    service::{
+        compact_tx_streamer_client::CompactTxStreamerClient, BlockId, ChainSpec, Empty, TreeState,
+    },
 };
 use zcash_client_backend::tor::{
     http::{HttpError, TimeoutPhase},
@@ -22,12 +24,14 @@ use zcash_client_backend::tor::{
 };
 
 pub use crate::network_privacy::NetworkPrivacyStatus;
-use crate::wallet::birthday::{self, BirthdayAnchor, SAPLING_ACTIVATION};
+use crate::wallet::block_times::{self, BlockTimePoint};
 use crate::wallet::network::WalletNetwork;
 
 const TOR_API_RESPONSE_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 const TOR_HTTP_REQUEST_TIMEOUT_ERROR: &str = "Tor HTTP request timed out";
 const TOR_HTTP_REQUEST_CANCELLED_ERROR: &str = "Tor HTTP request cancelled";
+const MAINNET_SAPLING_ACTIVATION_HEIGHT: u64 = 419_200;
+const MAINNET_SAPLING_ACTIVATION_TIME: u32 = 1_540_779_337;
 static TOR_HTTP_CANCELLATIONS: LazyLock<Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_TOR_HTTP_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -394,11 +398,11 @@ pub async fn get_import_birthday_metadata(
         .await
         .map_err(|error| error.to_string())?;
 
-    if use_mainnet_fast_path && birthday::uses_mainnet_anchors(WalletNetwork::Main) {
+    if use_mainnet_fast_path && block_times::table_covers(WalletNetwork::Main) {
         let tip = mainnet_tip(&mut client).await?;
         return Ok(ImportBirthdayMetadata {
-            sapling_activation_height: SAPLING_ACTIVATION.height,
-            sapling_activation_time: SAPLING_ACTIVATION.time,
+            sapling_activation_height: MAINNET_SAPLING_ACTIVATION_HEIGHT,
+            sapling_activation_time: MAINNET_SAPLING_ACTIVATION_TIME,
             tip_height: tip.height,
             tip_time: tip.time,
         });
@@ -435,12 +439,12 @@ pub async fn estimate_import_birthday_height(
     tip_height: Option<u64>,
     tip_time: Option<u32>,
 ) -> Result<u64, String> {
-    if use_mainnet_fast_path && birthday::uses_mainnet_anchors(WalletNetwork::Main) {
-        // Reuse metadata fetched by the birthday screen without even opening a
-        // channel. Otherwise request only the public chain tip, never a height
-        // inferred from the user's birthday.
+    if use_mainnet_fast_path && block_times::table_covers(WalletNetwork::Main) {
+        // Mainnet answers from the compiled-in block-time table. The only
+        // request, when the caller has no tip yet, is the chain tip, which
+        // carries nothing derived from the wallet.
         let tip = match (tip_height, tip_time) {
-            (Some(height), Some(time)) => BirthdayAnchor { height, time },
+            (Some(height), Some(time)) => BlockTimePoint { height, time },
             _ => {
                 let mut client = crate::wallet::sync_engine::open_lwd_channel(&lightwalletd_url)
                     .await
@@ -448,13 +452,16 @@ pub async fn estimate_import_birthday_height(
                 mainnet_tip(&mut client).await?
             }
         };
-        return birthday::mainnet_height_for_time(target_epoch_seconds, tip);
+        let tip = validate_mainnet_tip(tip)?;
+        return Ok(block_times::mainnet_height_for_time(
+            target_epoch_seconds,
+            Some(tip),
+        ));
     }
 
     let mut client = crate::wallet::sync_engine::open_lwd_channel(&lightwalletd_url)
         .await
         .map_err(|error| error.to_string())?;
-
     let info = client
         .get_lightd_info(timed_birthday_request(Empty {}))
         .await
@@ -475,28 +482,22 @@ pub async fn estimate_import_birthday_height(
     .await
 }
 
-/// Public tip metadata; all request heights are independent of the wallet.
+/// The mainnet chain tip's height and time. None of these requests carries
+/// anything derived from the wallet.
+///
+/// Uses `GetLatestTreeState`. Older custom lightwalletd servers that don't
+/// implement it answer `Unimplemented`, and then the tip comes from
+/// `GetLatestBlock` plus `GetBlock` at that tip.
 async fn mainnet_tip(
     client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
-) -> Result<BirthdayAnchor, String> {
-    let tip = match client
+) -> Result<BlockTimePoint, String> {
+    let reply = client
         .get_latest_tree_state(timed_birthday_request(Empty {}))
         .await
-    {
-        Ok(response) => {
-            let tip = response.into_inner();
-            if !is_mainnet(&tip.network) {
-                return Err(format!(
-                    "Expected mainnet birthday metadata, endpoint reported {}",
-                    tip.network
-                ));
-            }
-            BirthdayAnchor {
-                height: tip.height,
-                time: tip.time,
-            }
-        }
-        Err(error) if error.code() == tonic::Code::Unimplemented => {
+        .map(|response| response.into_inner());
+    let tip = match classify_mainnet_tip_reply(reply)? {
+        MainnetTipReply::Tip(tip) => tip,
+        MainnetTipReply::Unsupported => {
             let tip = client
                 .get_latest_block(timed_birthday_request(ChainSpec {}))
                 .await
@@ -504,16 +505,58 @@ async fn mainnet_tip(
                 .into_inner();
             let block = block_at_height(client, tip.height).await?;
             if block.height != tip.height {
-                return Err("Latest block response has an unexpected height".to_string());
+                return Err(format!(
+                    "GetBlock({}): endpoint returned height {}",
+                    tip.height, block.height
+                ));
             }
-            BirthdayAnchor {
+            BlockTimePoint {
                 height: tip.height,
                 time: block.time,
             }
         }
-        Err(error) => return Err(format!("GetLatestTreeState: {error}")),
     };
-    birthday::validate_mainnet_tip(tip)
+    validate_mainnet_tip(tip)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MainnetTipReply {
+    Tip(BlockTimePoint),
+    /// The server lacks `GetLatestTreeState`; use the legacy requests.
+    Unsupported,
+}
+
+fn classify_mainnet_tip_reply(
+    reply: Result<TreeState, tonic::Status>,
+) -> Result<MainnetTipReply, String> {
+    match reply {
+        Ok(tip) if is_mainnet(&tip.network) => Ok(MainnetTipReply::Tip(BlockTimePoint {
+            height: tip.height,
+            time: tip.time,
+        })),
+        Ok(tip) => Err(format!(
+            "Expected mainnet birthday metadata, endpoint reported {}",
+            tip.network
+        )),
+        Err(error) if error.code() == tonic::Code::Unimplemented => {
+            Ok(MainnetTipReply::Unsupported)
+        }
+        Err(error) => Err(format!("GetLatestTreeState: {error}")),
+    }
+}
+
+fn validate_mainnet_tip(tip: BlockTimePoint) -> Result<BlockTimePoint, String> {
+    if tip.height < MAINNET_SAPLING_ACTIVATION_HEIGHT || tip.time < MAINNET_SAPLING_ACTIVATION_TIME
+    {
+        return Err("Mainnet tip predates Sapling activation".to_string());
+    }
+    if tip.height > u64::from(u32::MAX) {
+        return Err("Mainnet tip exceeds the supported block height range".to_string());
+    }
+    if !block_times::tip_agrees_with_table(tip) {
+        return Err("Mainnet tip time disagrees with the block-time table".to_string());
+    }
+    Ok(tip)
 }
 
 async fn binary_search_birthday_height(
@@ -583,10 +626,104 @@ mod tests {
     };
 
     use super::{
-        normalize_tor_http_error, tor_http_begin_request, tor_http_cancel_request,
+        classify_mainnet_tip_reply, estimate_import_birthday_height, normalize_tor_http_error,
+        tor_http_begin_request, tor_http_cancel_request, validate_mainnet_tip,
         with_api_response_body_timeout, with_tor_http_request_cancellation,
-        with_tor_http_request_timeout, TOR_HTTP_REQUEST_TIMEOUT_ERROR,
+        with_tor_http_request_timeout, BlockTimePoint, MainnetTipReply, TreeState,
+        MAINNET_SAPLING_ACTIVATION_HEIGHT, MAINNET_SAPLING_ACTIVATION_TIME,
+        TOR_HTTP_REQUEST_TIMEOUT_ERROR,
     };
+
+    fn tree_state(network: &str, height: u64, time: u32) -> TreeState {
+        TreeState {
+            network: network.to_string(),
+            height,
+            time,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tree_state_reply_gives_the_mainnet_tip() {
+        assert_eq!(
+            classify_mainnet_tip_reply(Ok(tree_state("main", 3_499_000, 1_790_000_000))),
+            Ok(MainnetTipReply::Tip(BlockTimePoint {
+                height: 3_499_000,
+                time: 1_790_000_000,
+            }))
+        );
+    }
+
+    #[test]
+    fn servers_without_tree_state_fall_back_to_legacy_tip_requests() {
+        assert_eq!(
+            classify_mainnet_tip_reply(Err(tonic::Status::unimplemented("no"))),
+            Ok(MainnetTipReply::Unsupported)
+        );
+    }
+
+    #[test]
+    fn other_tip_failures_and_non_mainnet_endpoints_are_errors() {
+        let unavailable = classify_mainnet_tip_reply(Err(tonic::Status::unavailable("down")));
+        assert!(unavailable.unwrap_err().starts_with("GetLatestTreeState:"));
+
+        let testnet = classify_mainnet_tip_reply(Ok(tree_state("test", 3_000_000, 1_790_000_000)));
+        assert!(testnet.unwrap_err().contains("endpoint reported test"));
+    }
+
+    #[test]
+    fn tips_before_sapling_activation_are_rejected() {
+        let activation = BlockTimePoint {
+            height: MAINNET_SAPLING_ACTIVATION_HEIGHT,
+            time: MAINNET_SAPLING_ACTIVATION_TIME,
+        };
+        assert_eq!(validate_mainnet_tip(activation), Ok(activation));
+        for early in [
+            BlockTimePoint {
+                height: activation.height - 1,
+                ..activation
+            },
+            BlockTimePoint {
+                time: activation.time - 1,
+                ..activation
+            },
+        ] {
+            assert!(validate_mainnet_tip(early).is_err());
+        }
+    }
+
+    #[cfg(ironwood_masquerade)]
+    #[tokio::test]
+    async fn masquerade_estimate_uses_the_chain_endpoint_instead_of_the_table() {
+        // The fast path is off, so the unusable endpoint makes it fail rather
+        // than answer from the real-mainnet table.
+        let result = estimate_import_birthday_height(
+            "not-a-lightwalletd-url".to_string(),
+            1_677_602_242,
+            true,
+            Some(3_498_200),
+            Some(1_790_527_223),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[cfg(not(ironwood_masquerade))]
+    #[tokio::test]
+    async fn mainnet_estimate_with_a_known_tip_opens_no_connection() {
+        let height = estimate_import_birthday_height(
+            "not-a-lightwalletd-url".to_string(),
+            1_677_602_242,
+            true,
+            Some(3_498_200),
+            Some(1_790_527_223),
+        )
+        .await
+        .unwrap();
+
+        // Mainnet block 2,000,000 was mined at 1,677,602,242.
+        assert!(height.abs_diff(2_000_000) <= 288, "{height}");
+    }
 
     #[tokio::test]
     async fn ordinary_http_body_stall_is_cancelled_before_download_deadline() {
