@@ -1479,7 +1479,7 @@ class WidgetbookApp extends StatelessWidget {
                   name: 'Redeem',
                   useCases: [
                     WidgetbookUseCase(
-                      name: 'Already claimed',
+                      name: 'Claimed elsewhere',
                       builder: buildClaimedElsewhereUseCase,
                     ),
                     WidgetbookUseCase(
