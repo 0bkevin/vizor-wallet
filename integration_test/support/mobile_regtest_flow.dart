@@ -352,7 +352,7 @@ Future<void> restoreWalletDbFromDriver() async {
 
 // ── Mobile flow primitives ───────────────────────────────────────────
 
-/// Welcome → create flow → passcode ×2 → biometrics → home.
+/// Welcome → create flow → passcode ×2 → customisation → biometrics → home.
 Future<void> createWalletWithPasscode(WidgetTester tester) async {
   logE2e('creating wallet');
   await tapWidget(tester, const ValueKey('mobile_welcome_get_started'));
@@ -384,15 +384,30 @@ Future<void> createWalletWithPasscode(WidgetTester tester) async {
 }
 
 /// Welcome → import (clipboard paste) → review → birthday height → passcode
-/// (first wallet only) → home.
+/// (first wallet only) → customisation → biometrics (first wallet only) → home.
 Future<void> importWalletViaPaste(
   WidgetTester tester, {
   required String mnemonic,
   required int birthdayHeight,
   required bool isFirstWallet,
 }) async {
-  logE2e('importing wallet (first=$isFirstWallet)');
   await tapWidget(tester, const ValueKey('mobile_welcome_import'));
+  await importPassphraseViaPaste(
+    tester,
+    mnemonic: mnemonic,
+    birthdayHeight: birthdayHeight,
+    isFirstWallet: isFirstWallet,
+  );
+}
+
+/// Starts at the import-method selection shared by Welcome and Gift setup.
+Future<void> importPassphraseViaPaste(
+  WidgetTester tester, {
+  required String mnemonic,
+  required int birthdayHeight,
+  required bool isFirstWallet,
+}) async {
+  logE2e('importing wallet (first=$isFirstWallet)');
   await tapWidget(tester, const ValueKey('mobile_import_passphrase'));
   await Clipboard.setData(ClipboardData(text: mnemonic));
   await tapAppButton(tester, const ValueKey('mobile_import_paste'));

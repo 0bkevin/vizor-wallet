@@ -117,6 +117,12 @@ OS secure storage before leaving the card screen. All existing import methods
 remain available: secret passphrase, Link Vizor Desktop, and the hardware wallet
 options under their existing capability gates.
 
+At startup, this import handoff also identifies unfinished first-wallet setup.
+If no account exists, discard the prepared credential so the next import asks
+for a passcode again; keep the bearer journal for recovery. A durable account
+keeps its credential and routes to unlock. An unreadable account DB blocks
+startup without removing either credential or journal.
+
 A sole imported account receives the card automatically. Multiple imported
 accounts reuse **Choose receiving account**, including additional ZIP32 accounts.
 Confirmation switches Home to that account, saves the pinned recipient, registers
@@ -204,6 +210,31 @@ fvm flutter test --tags mobile --run-skipped --dart-define=VIZOR_FORM_FACTOR=mob
 fvm flutter test
 fvm flutter analyze
 ```
+
+Permanent iOS simulator regtest coverage runs with:
+
+```bash
+SIMULATOR_UDID=<simulator-uuid> scripts/e2e/flutter-ios-regtest-mobile-gift-onboarding.sh
+scripts/e2e/flutter-ios-regtest-mobile-create-sync.sh
+scripts/e2e/flutter-ios-regtest-mobile-import-sync.sh
+```
+
+The Gift runner covers an unfunded card's exit, first-wallet creation and import,
+automatic real 0.1 TAZ receipt in Home balance/Activity, manual carousel selection,
+backup deferral and completion, loaded birthday metadata, and Zcash education.
+It also removes an unconfirmed card's recipient after adding another account
+and verifies removal of both the saved Card and temporary claim DB. Finalized
+receipts retain transaction evidence while deleting the bearer and temporary DB
+after six scanned confirmations. It is part of the full mobile E2E runner;
+the older Settings Gift round trip remains a separate scenario. No mnemonic or
+bearer link is logged or captured. Simulator runs choose **Not now** on Face ID.
+
+On 2026-10-02, all three Gift scenarios and the existing ordinary creation and
+funded-import scenarios passed on iPhone 17 Pro / iOS 26.3. The import-restart
+fix also passed 73 focused bootstrap/setup-recovery tests; scoped analysis of
+six affected Dart files found no issues. Each Gift scenario mounts a fresh app
+and drains accepted claim work before teardown. It does not clear storage under
+a live flow. The full 19-scenario mobile suite was not run in this verification.
 
 Integrated validation on 2026-10-02 used an iPhone 17 Pro / iOS 26.3 simulator
 and an isolated Zcash regtest chain. It covered native Welcome playback, a real
