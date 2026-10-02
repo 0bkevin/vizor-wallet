@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zcash_wallet/src/app_bootstrap.dart';
 import 'package:zcash_wallet/src/core/config/rpc_endpoint_config.dart';
 import 'package:zcash_wallet/src/core/storage/app_secure_store.dart';
+import 'package:zcash_wallet/src/core/security/software_wallet_secret.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
 import 'package:zcash_wallet/src/providers/app_security_provider.dart';
 import 'package:zcash_wallet/src/core/profile_pictures.dart';
@@ -93,6 +94,191 @@ void main() {
   Future<String?> pending() => store.readSecretStringWithOptions(
     kPendingAccountMnemonicStorageKey,
     requireUnlockedSession: true,
+  );
+
+  test(
+    'failed rollback preserves the credential and blocks replacement until cleanup succeeds',
+    () async {
+      final security = container.read(appSecurityProvider.notifier);
+      await security.preparePasswordSetup(_passcode);
+      _rust.importError = StateError('pre-account failure');
+      await expectLater(
+        accounts().createGiftClaimAccount(
+          name: _name,
+          profilePictureId: _profile,
+          link: incomingLink,
+        ),
+        throwsStateError,
+      );
+      storage.failNextDeleteFor(kPendingAccountMnemonicStorageKey);
+      await expectLater(security.rollbackPasswordSetup(), throwsStateError);
+      expect(await store.isPasswordConfigured(), isTrue);
+      expect(
+        await store.readPlain(kPendingAccountMnemonicStorageKey),
+        isNotNull,
+      );
+      await expectLater(
+        security.preparePasswordSetup('24680246'),
+        throwsStateError,
+      );
+      await security.rollbackPasswordSetup();
+      expect(await store.isPasswordConfigured(), isFalse);
+      expect(await store.readPlain(kPendingAccountMnemonicStorageKey), isNull);
+      await security.preparePasswordSetup('24680246');
+      expect(await store.verifyPassword('24680246'), isTrue);
+    },
+  );
+
+  for (final pendingRecovery in [false, true]) {
+    test(
+      'successful password commit clears only a completed setup marker: pending=$pendingRecovery',
+      () async {
+        final security = container.read(appSecurityProvider.notifier);
+        await security.preparePasswordSetup(_passcode);
+        if (pendingRecovery) {
+          await store.writeSecretString(
+            kPendingAccountMnemonicStorageKey,
+            _pendingDraft(),
+          );
+        }
+        await security.completePasswordSetup();
+        expect(container.read(appSecurityProvider).isUnlocked, isTrue);
+        expect(await store.verifyPassword(_passcode), isTrue);
+        expect(
+          await store.readPlain(kGiftWalletSetupStartedStorageKey),
+          pendingRecovery ? isNotNull : isNull,
+        );
+        expect(await pending(), pendingRecovery ? isNotNull : isNull);
+      },
+    );
+  }
+
+  for (final key in [
+    'zcash_account_mnemonic_uuid-1',
+    'zcash_accounts',
+    'zcash_active_account',
+  ]) {
+    test(
+      'ordinary setup recovers the same account after a failed $key save',
+      () async {
+        final security = container.read(appSecurityProvider.notifier);
+        await security.preparePasswordSetup(_passcode);
+        storage.failNextWriteFor(key);
+        Object? failure;
+        try {
+          await accounts().createAccountFromMnemonic(
+            mnemonic: _mnemonic,
+            name: _name,
+            profilePictureId: _profile,
+          );
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure, isA<WalletAccountSetupInterruptedException>());
+        expect(jsonDecode(_rust.pendingAtImport!)['kind'], 'software');
+        await security.finishPasswordSetupAfterFailure(
+          accountMayExist: failure is WalletAccountSetupInterruptedException,
+        );
+        expect(await store.verifyPassword(_passcode), isTrue);
+        final metadata = await store.readString('zcash_accounts');
+        final restarted = ProviderContainer(
+          overrides: [
+            appBootstrapProvider.overrideWithValue(
+              _bootstrappedGiftAccount(
+                account: metadata == null
+                    ? null
+                    : AccountInfo.fromJson(
+                        (jsonDecode(metadata) as List).single
+                            as Map<String, dynamic>,
+                      ),
+              ),
+            ),
+            accountProvider.overrideWith(
+              () => AccountNotifier.testing(store: store),
+            ),
+            appSecurityProvider.overrideWith(
+              () => AppSecurityNotifier.testing(store: store),
+            ),
+          ],
+        );
+        addTearDown(restarted.dispose);
+        await restarted.read(accountProvider.future);
+        await restarted.read(accountProvider.notifier).restoreAfterUnlock();
+        expect(_rust.importCalls, 1);
+        expect(await store.readAccountMnemonic('uuid-1'), _mnemonic);
+        final recovered = restarted.read(accountProvider).value!.activeAccount!;
+        expect(recovered.name, _name);
+        expect(recovered.profilePictureId, normalizeProfilePictureId(_profile));
+        expect(recovered.setupPending, isFalse);
+        expect(recovered.giftEducationPending, isFalse);
+        expect(await pending(), isNull);
+        expect(restarted.read(appSecurityProvider).requiresUnlock, isFalse);
+      },
+    );
+  }
+
+  test(
+    'interrupted first import restores BIP39 secrets for every discovered account',
+    () async {
+      const extraPassphrase = 'BIP39 fixture';
+      await container
+          .read(appSecurityProvider.notifier)
+          .preparePasswordSetup(_passcode);
+      storage.failNextWriteFor('zcash_account_mnemonic_uuid-2');
+      await expectLater(
+        accounts().importAccount(
+          mnemonic: _mnemonic,
+          bip39Passphrase: extraPassphrase,
+          name: _name,
+          profilePictureId: _profile,
+          additionalAccountIndices: const [1],
+        ),
+        throwsA(isA<WalletAccountSetupInterruptedException>()),
+      );
+      await container
+          .read(appSecurityProvider.notifier)
+          .finishPasswordSetupAfterFailure(accountMayExist: true);
+      final recoveredBootstrap = _bootstrappedGiftAccount(
+        accounts: const [
+          AccountInfo(
+            uuid: 'uuid-1',
+            name: 'Account 1',
+            order: 0,
+            zip32AccountIndex: 0,
+            isSeedAnchor: true,
+          ),
+          AccountInfo(
+            uuid: 'uuid-2',
+            name: 'Account 2',
+            order: 1,
+            zip32AccountIndex: 1,
+          ),
+        ],
+      );
+      final restarted = ProviderContainer(
+        overrides: [
+          appBootstrapProvider.overrideWithValue(recoveredBootstrap),
+          accountProvider.overrideWith(
+            () => AccountNotifier.testing(store: store),
+          ),
+          appSecurityProvider.overrideWith(
+            () => AppSecurityNotifier.testing(store: store),
+          ),
+        ],
+      );
+      addTearDown(restarted.dispose);
+      await restarted.read(accountProvider.future);
+      await restarted.read(accountProvider.notifier).restoreAfterUnlock();
+      for (final uuid in ['uuid-1', 'uuid-2']) {
+        final secret = await store.readAccountSoftwareWalletSecret(uuid);
+        expect(secret!.mnemonic, _mnemonic);
+        expect(secret.bip39Passphrase, extraPassphrase);
+      }
+      expect(restarted.read(accountProvider).value!.accounts.first.name, _name);
+      expect(restarted.read(accountSetupRecoveryGenerationProvider), 1);
+      expect(_rust.importCalls, 1);
+      expect(await pending(), isNull);
+    },
   );
 
   test('the passphrase is pending before the account exists', () async {
@@ -803,17 +989,23 @@ final _noWalletBootstrap = AppBootstrapState(
   passwordRotationRecoveryFailed: false,
 );
 
-AppBootstrapState _bootstrappedGiftAccount() => AppBootstrapState(
+AppBootstrapState _bootstrappedGiftAccount({
+  AccountInfo? account,
+  List<AccountInfo>? accounts,
+}) => AppBootstrapState(
   initialLocation: '/home',
-  initialAccountState: const AccountState(
-    accounts: [
-      AccountInfo(
-        uuid: 'uuid-1',
-        name: 'Account 1',
-        order: 0,
-        isSeedAnchor: true,
-      ),
-    ],
+  initialAccountState: AccountState(
+    accounts:
+        accounts ??
+        [
+          account ??
+              const AccountInfo(
+                uuid: 'uuid-1',
+                name: 'Account 1',
+                order: 0,
+                isSeedAnchor: true,
+              ),
+        ],
     activeAccountUuid: 'uuid-1',
     activeAddress: 'u1uuid-1',
   ),
@@ -837,6 +1029,8 @@ class _GiftAccountRustApi implements RustLibApi {
   List<rust_wallet.AccountInfo> listedAccounts = const [];
   String? accountForMnemonic;
   String? pendingAtImport;
+  String importedBip39Passphrase = '';
+  bool importedAdditionalAccount = false;
   String? importedDbPath;
   int importCalls = 0;
   int listCalls = 0;
@@ -850,6 +1044,8 @@ class _GiftAccountRustApi implements RustLibApi {
     listedAccounts = const [];
     accountForMnemonic = null;
     pendingAtImport = null;
+    importedBip39Passphrase = '';
+    importedAdditionalAccount = false;
     importedDbPath = null;
     importCalls = 0;
     listCalls = 0;
@@ -890,6 +1086,7 @@ class _GiftAccountRustApi implements RustLibApi {
       File(dbPath).writeAsStringSync('gift account database');
       walletExists = true;
       accountForMnemonic = 'uuid-1';
+      if (importError == null) listedAccounts = [_listed('uuid-1')];
     }
     if (importError case final error?) throw error;
     // Without a session the passphrase write that follows fails.
@@ -901,12 +1098,75 @@ class _GiftAccountRustApi implements RustLibApi {
   }
 
   @override
+  Future<rust_wallet.SoftwareWalletImportWithDiscoveryResult>
+  crateApiWalletImportSoftwareWalletWithAccountDiscovery({
+    required String mnemonic,
+    required String bip39Passphrase,
+    BigInt? birthdayHeight,
+    required String network,
+    required String dbPath,
+    String? firstAccountName,
+    required bool isFirstWalletAccount,
+    required int nextAccountNumber,
+    required List<int> additionalAccountIndices,
+  }) async {
+    await crateApiWalletImportWallet(
+      mnemonic: mnemonic,
+      bip39Passphrase: bip39Passphrase,
+      network: network,
+      dbPath: dbPath,
+      accountName: firstAccountName,
+    );
+    importedBip39Passphrase = bip39Passphrase;
+    importedAdditionalAccount = additionalAccountIndices.contains(1);
+    if (importedAdditionalAccount) {
+      listedAccounts = [_listed('uuid-1'), _listed('uuid-2')];
+    }
+    return rust_wallet.SoftwareWalletImportWithDiscoveryResult(
+      didImportPrimaryAccount: true,
+      accounts: [
+        rust_wallet.SoftwareWalletImportAccount(
+          accountUuid: 'uuid-1',
+          unifiedAddress: 'u1uuid-1',
+          zip32AccountIndex: 0,
+          name: firstAccountName!,
+          isSeedAnchor: true,
+        ),
+        if (importedAdditionalAccount)
+          const rust_wallet.SoftwareWalletImportAccount(
+            accountUuid: 'uuid-2',
+            unifiedAddress: 'u1uuid-2',
+            zip32AccountIndex: 1,
+            name: 'Account 2',
+            isSeedAnchor: false,
+          ),
+      ],
+    );
+  }
+
+  @override
+  Future<String> crateApiWalletGetUnifiedAddress({
+    required String dbPath,
+    required String network,
+    String? accountUuid,
+  }) async => 'u1$accountUuid';
+
+  @override
   Future<String?> crateApiWalletFindSoftwareAccountForMnemonic({
     required String mnemonic,
     required String network,
     required String dbPath,
     required int zip32AccountIndex,
-  }) async => mnemonic == _mnemonic ? accountForMnemonic : null;
+  }) async {
+    final secret = SoftwareWalletSecret.decode(mnemonic);
+    if (secret.mnemonic != _mnemonic ||
+        secret.bip39Passphrase != importedBip39Passphrase) {
+      return null;
+    }
+    return zip32AccountIndex == 1 && importedAdditionalAccount
+        ? 'uuid-2'
+        : accountForMnemonic;
+  }
 
   @override
   Future<String> crateApiSecretDeriveSecretPasswordVerifier({

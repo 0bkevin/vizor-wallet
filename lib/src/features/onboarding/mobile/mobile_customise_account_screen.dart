@@ -12,6 +12,7 @@ import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_icon.dart';
 import '../../../core/widgets/app_profile_picture.dart';
 import '../../../providers/app_security_provider.dart';
+import '../../../providers/account_provider.dart';
 import '../../../providers/router_refresh_provider.dart';
 import '../../accounts/widgets/mobile/account_edit_sheets.dart'
     show showProfilePictureSheet;
@@ -248,16 +249,20 @@ class _MobileCustomiseAccountScreenState
         await securityNotifier.preparePasswordSetup(pendingPassword);
         passwordPrepared = true;
         await createAccount();
-        securityNotifier.commitPasswordSetup();
+        await securityNotifier.completePasswordSetup();
         passwordCommitted = true;
         await completeGiftClaimImportSetup(ref);
         clearCustomisedAccountDraft(ref, args.flow);
         router.go('/onboarding/biometrics');
       });
-    } catch (_) {
+    } catch (e) {
       if (passwordPrepared && !passwordCommitted) {
         try {
-          await securityNotifier.rollbackPasswordSetup();
+          await securityNotifier.finishPasswordSetupAfterFailure(
+            accountMayExist:
+                e is WalletAccountSetupInterruptedException ||
+                (ref.read(accountProvider).value?.hasAccounts ?? false),
+          );
         } catch (rollbackError, rollbackStack) {
           log(
             'MobileCustomiseAccount._finishSetup: password rollback failed: '

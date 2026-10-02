@@ -830,7 +830,7 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
                 await securityNotifier.preparePasswordSetup(pendingPassword);
                 passwordPrepared = true;
                 await importAccount();
-                securityNotifier.commitPasswordSetup();
+                await securityNotifier.completePasswordSetup();
                 passwordCommitted = true;
                 unawaited(
                   inputSourceService.remember(args.passwordInputSource),

@@ -182,7 +182,7 @@ void main() {
       );
       addTearDown(next.dispose);
       final security = next.read(appSecurityProvider.notifier);
-      await security.prepareGiftWalletPasswordSetup(_passcode);
+      await security.preparePasswordSetup(_passcode);
       expect(security.hasPreparedPasswordSetup, isTrue);
       await security.rollbackPasswordSetup();
     });
@@ -226,7 +226,7 @@ void main() {
     });
   }
 
-  testWidgets('ordinary password setup does not write a Gift marker', (
+  testWidgets('ordinary password setup records recovery until rollback', (
     tester,
   ) async {
     await mount(tester);
@@ -234,8 +234,10 @@ void main() {
       final security = container.read(appSecurityProvider.notifier);
       await security.preparePasswordSetup(_passcode);
       expect(await store.isPasswordConfigured(), isTrue);
-      expect(await store.readPlain(kGiftWalletSetupStartedStorageKey), isNull);
+      expect(await store.readPlain(kGiftWalletSetupStartedStorageKey), 'true');
       await security.rollbackPasswordSetup();
+      expect(await store.readPlain(kGiftWalletSetupStartedStorageKey), isNull);
+      expect(await store.isPasswordConfigured(), isFalse);
     });
   });
 
@@ -245,9 +247,7 @@ void main() {
     await mount(tester);
     await tester.runAsync(() async {
       await expectLater(
-        container
-            .read(appSecurityProvider.notifier)
-            .prepareGiftWalletPasswordSetup(''),
+        container.read(appSecurityProvider.notifier).preparePasswordSetup(''),
         throwsArgumentError,
       );
       expect(backend.writeKeys, isEmpty);

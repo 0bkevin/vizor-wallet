@@ -975,6 +975,9 @@ class _RecordingSecurityNotifier extends AppSecurityNotifier {
   }
 
   @override
+  Future<void> completePasswordSetup() async => commitPasswordSetup();
+
+  @override
   Future<void> rollbackPasswordSetup() async {}
 }
 

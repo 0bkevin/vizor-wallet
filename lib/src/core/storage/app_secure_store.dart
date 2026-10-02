@@ -765,6 +765,12 @@ class AppSecureStore {
   Future<void> clearPasswordConfiguration() {
     if (enforcesSessionGeneration) clearSessionPassword();
     return _secretMutationLock.run(() async {
+      // Remove abandoned recovery material before its decryption credential.
+      // A failed delete must not leave an old journal beside a new password.
+      await _runStorageOperation(
+        'delete pending account mnemonic',
+        () => _storage.delete(key: kPendingAccountMnemonicStorageKey),
+      );
       await _runStorageOperation(
         'delete password verifier salt',
         () => _storage.delete(key: _passwordVerifierSaltKey),
@@ -776,10 +782,6 @@ class AppSecureStore {
       await _runStorageOperation(
         'delete password rotation record',
         () => _storage.delete(key: _passwordRotationInProgressKey),
-      );
-      await _runStorageOperation(
-        'delete pending account mnemonic',
-        () => _storage.delete(key: kPendingAccountMnemonicStorageKey),
       );
       // Keep the start marker until all credential and journal deletes finish,
       // so startup can repeat cleanup if the process exits during a delete.

@@ -4224,6 +4224,7 @@ Widget _buildMobileBiometricOptInUseCase(BiometricUnlockState biometricState) {
 Widget _buildMobileUnlockModalUseCase(BuildContext context, Widget sheet) {
   return ProviderScope(
     overrides: [
+      paymentLinkClaimsInFlightProvider.overrideWith((ref) async => 0),
       biometricUnlockProvider.overrideWith(
         () => _PreviewBiometricUnlockNotifier(
           const BiometricUnlockState(

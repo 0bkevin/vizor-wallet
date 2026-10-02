@@ -267,7 +267,9 @@ void main() {
         );
         expect(
           await storage.readPlain(_verifierSaltKey),
-          key == _verifierSaltKey ? 'password-salt' : isNull,
+          key == _verifierSaltKey || key == kPendingAccountMnemonicStorageKey
+              ? 'password-salt'
+              : isNull,
         );
         await expectCleared(await bootstrap());
       },

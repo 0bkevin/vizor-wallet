@@ -205,7 +205,7 @@ class _MobilePasscodeScreenState extends ConsumerState<MobilePasscodeScreen> {
           }
         });
 
-        securityNotifier.commitPasswordSetup();
+        await securityNotifier.completePasswordSetup();
         passwordCommitted = true;
         if (args.flow == SetPasswordFlow.importKeystone) {
           ref.read(keystoneOnboardingProvider.notifier).resetScan();
@@ -229,7 +229,11 @@ class _MobilePasscodeScreenState extends ConsumerState<MobilePasscodeScreen> {
     } catch (e, st) {
       if (passwordPrepared && !passwordCommitted) {
         try {
-          await securityNotifier.rollbackPasswordSetup();
+          await securityNotifier.finishPasswordSetupAfterFailure(
+            accountMayExist:
+                e is WalletAccountSetupInterruptedException ||
+                (ref.read(accountProvider).value?.hasAccounts ?? false),
+          );
         } catch (rollbackError, rollbackStack) {
           log(
             'MobilePasscode: password rollback failed: '

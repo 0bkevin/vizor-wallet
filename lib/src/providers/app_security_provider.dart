@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app_bootstrap.dart';
@@ -153,17 +153,10 @@ class AppSecurityNotifier extends Notifier<AppSecurityState> {
       .read(linuxKeyringCoordinatorProvider)
       .runMutation(() => _preparePasswordSetup(password));
 
-  /// Records first Gift wallet setup before any password writes can persist.
-  Future<void> prepareGiftWalletPasswordSetup(String password) => ref
-      .read(linuxKeyringCoordinatorProvider)
-      .runMutation(
-        () => _preparePasswordSetup(password, recordGiftSetupStart: true),
-      );
+  Future<void> prepareGiftWalletPasswordSetup(String password) =>
+      preparePasswordSetup(password);
 
-  Future<void> _preparePasswordSetup(
-    String password, {
-    bool recordGiftSetupStart = false,
-  }) async {
+  Future<void> _preparePasswordSetup(String password) async {
     final lifecycleGeneration = _lifecycleGeneration;
     final requestGeneration = _unlockRequestGeneration;
     final sessionGeneration = _store.sessionGeneration;
@@ -177,9 +170,9 @@ class AppSecurityNotifier extends Notifier<AppSecurityState> {
     if (error != null) {
       throw ArgumentError(error);
     }
-    if (recordGiftSetupStart) {
-      await _store.writePlain(kGiftWalletSetupStartedStorageKey, 'true');
-    }
+    // Bootstrap must also recover interrupted ordinary creation/import before
+    // an account exists. This marker precedes every first-wallet credential.
+    await _store.writePlain(kGiftWalletSetupStartedStorageKey, 'true');
     // Persist the verifier and open the secure-storage session before account
     // creation/import writes the encrypted mnemonic. Publishing provider state
     // is still delayed until commit so the router never sees half-completed
@@ -222,15 +215,44 @@ class AppSecurityNotifier extends Notifier<AppSecurityState> {
     );
   }
 
+  /// Finish a successfully persisted account, including hardware/Wallet Link
+  /// imports that have no pending software mnemonic journal to clear.
+  Future<void>
+  completePasswordSetup() => ref.read(linuxKeyringCoordinatorProvider).runMutation(
+    () async {
+      commitPasswordSetup();
+      try {
+        if (await _store.readPlain(kPendingAccountMnemonicStorageKey) == null) {
+          await _store.delete(kGiftWalletSetupStartedStorageKey);
+        }
+      } catch (error) {
+        // The account and credential are durable; bootstrap retries marker cleanup.
+        debugPrint(
+          'Completed password setup marker cleanup failed: ${error.runtimeType}',
+        );
+      }
+    },
+  );
+
   Future<void> rollbackPasswordSetup() => ref
       .read(linuxKeyringCoordinatorProvider)
       .runMutation(() => _rollbackPasswordSetup());
 
+  Future<void> finishPasswordSetupAfterFailure({
+    required bool accountMayExist,
+  }) async {
+    if (accountMayExist) {
+      commitPasswordSetup();
+    } else {
+      await rollbackPasswordSetup();
+    }
+  }
+
   Future<void> _rollbackPasswordSetup() async {
     if (!_isPasswordSetupPrepared) return;
+    await _store.clearPasswordConfiguration();
     _isPasswordSetupPrepared = false;
     _passwordSetupSessionGeneration = null;
-    await _store.clearPasswordConfiguration();
   }
 
   Future<bool> unlock(String password) async {

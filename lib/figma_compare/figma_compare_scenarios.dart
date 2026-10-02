@@ -76,6 +76,13 @@ class FigmaCompareScenario {
 /// because they are already used to review the same UI states.
 const figmaCompareScenarios = <FigmaCompareScenario>[
   FigmaCompareScenario(
+    id: 'mobile-forgot-passcode-warning',
+    description: 'Reset confirmation including unbacked account warning',
+    builder: buildMobileForgotPasscodeSheetUseCase,
+    desktop: false,
+    mobile: true,
+  ),
+  FigmaCompareScenario(
     id: 'mobile-accounts-unbacked-removal',
     description: 'Unbacked software account removal warning',
     builder: buildMobileAccountsUnbackedUpRemoveCapture,

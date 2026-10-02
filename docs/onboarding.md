@@ -165,6 +165,21 @@ journal cleanup.
   their temporary claim wallet and recovery secrets after the existing
   six-scanned-confirmation condition.
 
+### Shared account-setup safety
+
+Ordinary first-wallet creation and passphrase import write encrypted recovery
+material before the Rust DB mutation. Import recovery includes the BIP39
+passphrase and all discovered ZIP32 accounts. A DB account that may already
+exist keeps its credential; restart/unlock finishes its original secret and
+metadata writes instead of creating a replacement account. Existing stored
+recovery material is verified against the DB before any missing secret is added.
+
+Pre-account rollback deletes the pending journal before removing its credential.
+A failed cleanup blocks a replacement credential until retry succeeds. Successful
+hardware/Wallet Link setup clears its start marker without deleting a pending
+mnemonic journal. Forgot passcode explicitly warns that resetting an unbacked
+account makes its funds unrecoverable.
+
 ## Home, backup, and education
 
 Home's setup carousel is **manual**, using swipe and page indicators. It contains
