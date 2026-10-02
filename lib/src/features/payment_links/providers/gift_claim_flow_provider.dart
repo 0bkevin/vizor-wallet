@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../main.dart' show log;
+import '../../../providers/app_security_provider.dart';
 import '../../../providers/wallet_provider.dart';
 import '../models/vizor_payment_link.dart';
 import '../services/payment_link_service.dart';
@@ -15,7 +16,7 @@ enum GiftClaimPhase { checking, longSyncConfirmation, inspected, failed }
 
 enum GiftClaimFailure { network, otherNetwork, invalid }
 
-/// The Gift Card a recipient without a wallet is looking at on `/gift`.
+/// The Gift Card a recipient is looking at on `/gift`.
 ///
 /// It owns its link and inspection apart from the intake queue, so a second
 /// incoming link cannot replace what the user is reviewing.
@@ -27,6 +28,7 @@ class GiftClaimFlowState {
     this.inspection,
     this.failure,
     this.setupPasscode,
+    this.walletSetupInProgress = false,
   });
 
   final VizorPaymentLink link;
@@ -35,7 +37,7 @@ class GiftClaimFlowState {
   final GiftClaimFailure? failure;
   // Kept only until setup leaves the screen. Route refresh must not serialize it.
   final String? setupPasscode;
-  bool get walletSetupInProgress => setupPasscode != null;
+  final bool walletSetupInProgress;
 }
 
 /// Carries the inspected Card through normal wallet import. The import commits
@@ -111,13 +113,28 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
   // Different payloads can use the same claim wallet. Drain the old check and
   // its cleanup before inspecting another payload with that wallet identity.
   final _cleanupByWallet = <String, Future<void>>{};
+  Completer<void>? _unlockWaiter;
+  int _lockGeneration = 0;
 
   @override
   GiftClaimFlowState? build() {
-    // Once a wallet exists, setup or Payment Links owns the Card; the
+    ref.listen(appSecurityProvider, (previous, next) {
+      if (next.requiresUnlock) {
+        if (previous?.requiresUnlock != true) _lockGeneration++;
+      } else {
+        _unlockWaiter?.complete();
+        _unlockWaiter = null;
+      }
+    });
+    ref.onDispose(() {
+      _unlockWaiter?.complete();
+      _unlockWaiter = null;
+    });
+    // When the first wallet appears, setup or Payment Links owns the Card; the
     // claim wallet this flow checked stays available for that handoff.
-    ref.listen(walletProvider, (_, next) {
-      if (next.value?.hasWallet != true ||
+    ref.listen(walletProvider, (previous, next) {
+      if (previous?.value?.hasWallet == true ||
+          next.value?.hasWallet != true ||
           state == null ||
           state!.walletSetupInProgress) {
         return;
@@ -133,10 +150,10 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
     return null;
   }
 
-  /// Retain the checked Card while its first account finishes durable setup.
+  /// Retain the checked Card while its receiving account finishes durable setup.
   void beginWalletSetup(
     PaymentLinkClaimInspection inspection, {
-    required String passcode,
+    String? passcode,
   }) {
     _generation++;
     state = GiftClaimFlowState(
@@ -144,11 +161,15 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
       phase: GiftClaimPhase.inspected,
       inspection: inspection,
       setupPasscode: passcode,
+      walletSetupInProgress: true,
     );
   }
 
   /// Navigation away releases only the setup owned by this screen.
-  void finishWalletSetup(PaymentLinkClaimInspection inspection) {
+  void finishWalletSetup(
+    PaymentLinkClaimInspection inspection, {
+    bool handedOff = false,
+  }) {
     if (!ref.mounted ||
         state?.walletSetupInProgress != true ||
         !identical(state?.inspection, inspection)) {
@@ -157,11 +178,20 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
     final finished = state;
     _generation++;
     state = null;
-    // A completed account/Received handoff owns the cache. If setup was
-    // abandoned earlier, discard it; the service also protects partial journals.
-    if (ref.read(walletProvider).value?.hasWallet != true) {
+    // Only this Card's durable handoff owns the cache, not an existing account.
+    // The service still protects partially saved account recovery journals.
+    if (!handedOff) {
+      ref.read(paymentLinkIntakeProvider.notifier).discard(inspection.link);
       _queueInspectionCleanup(finished);
     }
+  }
+
+  /// Import has handed this Card to Received/claim recovery. Release only its
+  /// screen state; the new owner still needs the inspected claim wallet.
+  void finishImportSetup(PaymentLinkClaimInspection inspection) {
+    if (!ref.mounted || !identical(state?.inspection, inspection)) return;
+    _generation++;
+    state = null;
   }
 
   /// Starts checking [link] unless the same Card is already open.
@@ -186,7 +216,7 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
   void closeAfterPop(GiftClaimFlowState? poppedFlow) {
     if (!ref.mounted || !identical(state, poppedFlow)) return;
     if (state?.walletSetupInProgress == true ||
-        ref.read(walletProvider).value?.hasWallet == true) {
+        ref.read(giftClaimSetupReturnProvider) != null) {
       return;
     }
     unawaited(
@@ -200,16 +230,16 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
   Future<void> close() async {
     final current = state;
     _generation++;
-    await ref.read(giftClaimSetupReturnProvider.notifier).clear();
-    if (!ref.mounted || !identical(state, current)) return;
-    state = null;
-    _queueInspectionCleanup(current);
     final pending = ref.read(paymentLinkIntakeProvider).pendingLink;
     if (current != null &&
         pending != null &&
         pending.hasSameCanonicalPayload(current.link)) {
       ref.read(paymentLinkIntakeProvider.notifier).takePending();
     }
+    await ref.read(giftClaimSetupReturnProvider.notifier).clear();
+    if (!ref.mounted || !identical(state, current)) return;
+    state = null;
+    _queueInspectionCleanup(current);
   }
 
   /// Persist the Card before leaving for normal wallet import. The live caller
@@ -359,7 +389,18 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
       final finished = task == null ? flow : await task;
       final inspection = finished.inspection ?? flow.inspection;
       if (inspection != null) {
-        await operations.discardClaimInspection(inspection);
+        // Locked storage cannot prove this wallet is unsaved. Retain the
+        // cleanup (and serialize any reopening) until ownership can be checked.
+        while (ref.mounted) {
+          if (ref.read(appSecurityProvider).requiresUnlock) {
+            await (_unlockWaiter ??= Completer<void>()).future;
+            continue;
+          }
+          final lockGeneration = _lockGeneration;
+          await operations.discardClaimInspection(inspection);
+          if (!ref.mounted || lockGeneration == _lockGeneration) return;
+          // A lock during the asynchronous ownership check can skip deletion.
+        }
       }
     }();
     _cleanupByWallet[walletId] = cleanup;

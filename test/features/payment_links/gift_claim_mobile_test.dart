@@ -2,6 +2,9 @@
 library;
 
 import 'dart:async';
+import 'package:zcash_wallet/src/features/payment_links/providers/gift_card_entry_price_provider.dart';
+import 'package:zcash_wallet/src/features/payment_links/widgets/mobile/payment_link_scan_sheet.dart';
+import 'package:zcash_wallet/src/features/payment_links/widgets/mobile/payment_link_mobile_views.dart';
 import 'dart:io';
 import 'dart:ui' show SemanticsAction;
 
@@ -36,6 +39,7 @@ import 'package:zcash_wallet/src/features/payment_links/widgets/payment_link_cop
 import 'package:zcash_wallet/src/features/payment_links/providers/gift_claim_failure_notice_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_claim_coordinator_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/gift_claim_import_store.dart';
+import 'package:zcash_wallet/src/features/payment_links/services/gift_claim_setup_coordinator.dart';
 import 'package:zcash_wallet/src/features/payment_links/widgets/payment_link_long_sync_warning.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
 import 'package:zcash_wallet/src/providers/app_security_provider.dart';
@@ -63,11 +67,14 @@ void main() {
     WidgetTester tester, {
     String? clipboard,
     FakePaymentLinkClipboard? paymentClipboard,
+    PaymentLinkScanner? scanner,
+    Future<double?>? entryPrice,
     BiometricUnlock? biometric,
     Size size = const Size(393, 852),
     bool restored = false,
     bool testPrivacyLock = false,
     bool multipleRestoredAccounts = false,
+    bool addingGiftAccount = false,
     PaymentLinkReceivedStore? receivedStore,
     GiftClaimImportStore? importStore,
   }) async {
@@ -88,9 +95,16 @@ void main() {
                   : SyncKeepAwakePrivacyLockMode.hidden,
             ),
           ],
+          giftCardEntryPriceProvider.overrideWith(
+            (ref) => entryPrice ?? Future.value(null),
+          ),
+          if (scanner != null)
+            paymentLinkScannerProvider.overrideWithValue(scanner),
           appBootstrapProvider.overrideWithValue(_noWalletBootstrap),
           accountProvider.overrideWith(
-            restored
+            addingGiftAccount
+                ? _ExistingGiftAccounts.new
+                : restored
                 ? multipleRestoredAccounts
                       ? _MultipleImportedAccounts.new
                       : _ImportedAccounts.new
@@ -375,6 +389,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(GiftClaimScreen), findsOneWidget);
+    expect(
+      find.text('Create wallet by redeeming Vizor Gift Card'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Create a new Vizor wallet to receive the card’s balance.'),
+      findsOneWidget,
+    );
     expect(find.text('Paste card link'), findsOneWidget);
     expect(clipboard.readCalls, 0);
     expect(find.text('Gift found'), findsNothing);
@@ -1078,6 +1100,221 @@ void main() {
     expect(container.read(giftClaimFailureNoticeProvider), isNull);
   });
 
+  testWidgets('opening or cancelling the QR scanner keeps the entry card', (
+    tester,
+  ) async {
+    final scan = Completer<VizorPaymentLink?>();
+    await pumpWelcome(
+      tester,
+      scanner: (_, {required networkName}) => scan.future,
+    );
+    await tester.tap(keyed('mobile_welcome_redeem_card'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Scan QR code'));
+    await tester.pump();
+    expect(find.byType(PaymentLinkLoadingMobileCard), findsNothing);
+    expect(find.text('Paste card link'), findsOneWidget);
+    scan.complete(null);
+    await tester.pumpAndSettle();
+    expect(find.byType(PaymentLinkLoadingMobileCard), findsNothing);
+  });
+
+  testWidgets('Back consumes the deep link before asynchronous card cleanup', (
+    tester,
+  ) async {
+    final container = await pumpWelcome(tester);
+    container
+        .read(paymentLinkIntakeProvider.notifier)
+        .receive(incomingLink.toUri().toString());
+    await tester.pumpAndSettle();
+    final router = GoRouter.of(tester.element(find.byType(GiftClaimScreen)));
+    router.pop();
+    await tester.pumpAndSettle();
+    expect(location(tester), '/welcome');
+    expect(container.read(paymentLinkIntakeProvider).pendingLink, isNull);
+    expect(find.byType(GiftClaimScreen), findsNothing);
+  });
+
+  testWidgets('completed additional import releases the old Gift screen', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final container = await pumpWelcome(
+      tester,
+      restored: true,
+      addingGiftAccount: true,
+      clipboard: incomingLink.toUri().toString(),
+    );
+    final router = GoRouter.of(tester.element(find.byType(Navigator).last));
+    router.push('/add-account');
+    await tester.pumpAndSettle();
+    await tester.tap(keyed('mobile_welcome_redeem_card'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paste card link'));
+    await tester.pumpAndSettle();
+    final screenRef = tester
+        .state<ConsumerState<GiftClaimScreen>>(find.byType(GiftClaimScreen))
+        .ref;
+    final handoff = container
+        .read(giftClaimFlowProvider.notifier)
+        .handOffToSetup(accountUuidsBeforeSetup: const ['original']);
+    await tester.pumpAndSettle();
+    expect(await handoff, isTrue);
+    // Finish an import while the wallet already exists, as all import methods do.
+    await container
+        .read(accountProvider.notifier)
+        .importAccount(mnemonic: 'stub mnemonic words');
+    await tester.pumpAndSettle();
+    final bind = operations.bindGate = Completer<void>();
+    final completion = completeGiftClaimImportSetup(screenRef);
+    await tester.pumpAndSettle();
+    await completion;
+    await tester.pumpAndSettle();
+
+    expect(container.read(giftClaimFlowProvider), isNull);
+    expect(container.read(giftClaimSetupReturnProvider), isNull);
+    expect(container.read(paymentLinkIntakeProvider).pendingLink, isNull);
+    expect(operations.discarded, isEmpty);
+    expect(operations.bindDestinations, ['new-account']);
+    expect(operations.claimedDestinations, isEmpty);
+    expect(
+      (await container.read(paymentLinkReceivedStoreProvider).load())
+          .single
+          .setupAccountUuid,
+      'new-account',
+    );
+    expect(find.text('Paste card link'), findsOneWidget);
+
+    // Re-entering can accept another Card while the prior claim is still running.
+    await tester.tap(find.bySemanticsLabel('Back'));
+    await tester.pumpAndSettle();
+    await tester.tap(keyed('mobile_welcome_redeem_card'));
+    await tester.pumpAndSettle();
+    container
+        .read(paymentLinkIntakeProvider.notifier)
+        .receive(paymentLinkNavigationLink.toUri().toString());
+    await tester.pumpAndSettle();
+    expect(
+      container
+          .read(giftClaimFlowProvider)
+          ?.link
+          .hasSameCanonicalPayload(paymentLinkNavigationLink),
+      isTrue,
+    );
+    bind.complete();
+    await tester.pumpAndSettle();
+    expect(operations.claimedDestinations, ['new-account']);
+    expect(operations.discarded, isEmpty);
+  });
+
+  testWidgets(
+    'additional Gift setup skips passcode and claims without waiting for price',
+    (tester) async {
+      final price = Completer<double?>();
+      final container = await pumpWelcome(
+        tester,
+        restored: true,
+        addingGiftAccount: true,
+        clipboard: incomingLink.toUri().toString(),
+        entryPrice: price.future,
+      );
+      final router = GoRouter.of(tester.element(find.byType(Navigator).last));
+      router.push('/add-account');
+      await tester.pumpAndSettle();
+      await tester.tap(keyed('mobile_welcome_redeem_card'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Create account by redeeming Vizor Gift Card'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Create a new account to receive the card’s balance.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Create wallet by redeeming Vizor Gift Card'),
+        findsNothing,
+      );
+      await tester.tap(find.text('Paste card link'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Create an account or use one you have to claim it.'),
+        findsOneWidget,
+      );
+      expect(keyed('gift_claim_create_an_account_to_claim'), findsOneWidget);
+      expect(keyed('gift_claim_claim_with_an_existing_wallet'), findsOneWidget);
+      await tester.tap(keyed('gift_claim_claim_with_an_existing_wallet'));
+      await tester.pumpAndSettle();
+      expect(location(tester), '/onboarding/method');
+      router.pop();
+      await tester.pumpAndSettle();
+      await tester.tap(keyed('gift_claim_create_an_account_to_claim'));
+      await tester.pumpAndSettle();
+      expect(find.byType(MobileCustomiseAccountScreen), findsOneWidget);
+      expect(find.byType(MobilePasscodeScreen), findsNothing);
+      await tester.tap(keyed('mobile_customise_account_continue'));
+      await tester.pumpAndSettle();
+      expect(location(tester), '/home');
+      expect(
+        (container.read(appSecurityProvider.notifier) as _Security)
+            .prepareCalls,
+        0,
+      );
+      expect(operations.claimedDestinations, ['new-account']);
+      expect(
+        container.read(accountProvider).value!.accounts.map((a) => a.uuid),
+        ['original', 'new-account'],
+      );
+      expect(price.isCompleted, isFalse);
+      price.complete(null);
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'locking during additional Gift customisation cleans up after unlock',
+    (tester) async {
+      final container = await pumpWelcome(
+        tester,
+        restored: true,
+        addingGiftAccount: true,
+        clipboard: incomingLink.toUri().toString(),
+      );
+      final router = GoRouter.of(tester.element(find.byType(Navigator).last));
+      router.push('/add-account');
+      await tester.pumpAndSettle();
+      await tester.tap(keyed('mobile_welcome_redeem_card'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Paste card link'));
+      await tester.pumpAndSettle();
+      await tester.tap(keyed('gift_claim_create_an_account_to_claim'));
+      await tester.pumpAndSettle();
+      expect(find.byType(MobileCustomiseAccountScreen), findsOneWidget);
+      container
+          .read(paymentLinkIntakeProvider.notifier)
+          .prioritize(incomingLink);
+
+      final security =
+          container.read(appSecurityProvider.notifier) as _Security;
+      security.lock();
+      await tester.pumpAndSettle();
+      expect(location(tester), '/unlock');
+      expect(operations.discarded, isEmpty);
+      expect(container.read(paymentLinkIntakeProvider).pendingLink, isNull);
+      expect(
+        container.read(accountProvider).value!.accounts.map((a) => a.uuid),
+        ['original'],
+      );
+
+      security.commitPasswordSetup();
+      await tester.pumpAndSettle();
+      expect(location(tester), '/home');
+      expect(operations.discarded, hasLength(1));
+      expect(operations.claimedDestinations, isEmpty);
+      expect(find.byType(GiftClaimScreen), findsNothing);
+    },
+  );
+
   testWidgets('an incoming Card opens over Welcome', (tester) async {
     final container = await pumpWelcome(tester);
     operations.waiting = true;
@@ -1589,6 +1826,7 @@ class _NoAccounts extends AccountNotifier {
     state = AsyncData(
       AccountState(
         accounts: [
+          ...?state.value?.accounts,
           const AccountInfo(uuid: 'new-account', name: 'Imported 1', order: 0),
           if (importedAccountCount > 1)
             const AccountInfo(
@@ -1676,6 +1914,7 @@ class _NoAccounts extends AccountNotifier {
     state = AsyncData(
       AccountState(
         accounts: [
+          ...?state.value?.accounts.where((a) => a.uuid != 'new-account'),
           AccountInfo(
             uuid: 'new-account',
             name: name,
@@ -1733,6 +1972,21 @@ class _Security extends AppSecurityNotifier {
 
 class _IdleSync extends FakeSyncNotifier {
   _IdleSync() : super(SyncState());
+
+  @override
+  Future<WalletMutationSyncPause> pauseForWalletMutation({
+    FutureOr<void> Function()? onStoppingSync,
+  }) async => const WalletMutationSyncPause(
+    hadActiveSync: false,
+    hadPolling: false,
+    hadMempoolObserver: false,
+  );
+
+  @override
+  void resumeAfterWalletMutation(
+    WalletMutationSyncPause pause, {
+    bool forceRestart = false,
+  }) {}
 
   @override
   bool needsPauseForWalletMutation() => false;
@@ -1819,5 +2073,14 @@ class _MultipleImportedAccounts extends _NoAccounts {
     ],
     activeAccountUuid: 'new-account',
     activeAddress: 'u1new',
+  );
+}
+
+class _ExistingGiftAccounts extends _NoAccounts {
+  @override
+  AccountState build() => const AccountState(
+    accounts: [AccountInfo(uuid: 'original', name: 'Original', order: 0)],
+    activeAccountUuid: 'original',
+    activeAddress: 'u1original',
   );
 }

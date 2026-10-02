@@ -1,6 +1,7 @@
 // ignore_for_file: depend_on_referenced_packages
 // Preview boundaries are in memory; no wallet, network, storage or Rust calls.
 import 'dart:async';
+import '../src/features/payment_links/providers/gift_card_entry_price_provider.dart';
 import 'dart:io';
 import 'dart:math';
 
@@ -51,6 +52,11 @@ import 'screen_use_cases.dart';
 
 Widget buildMobileGiftOnboardingEntry(BuildContext context) =>
     const _GiftPreview(initialLocation: '/gift');
+Widget buildMobileGiftAddAccountEntry(BuildContext context) =>
+    const _GiftPreview(
+      initialLocation: '/gift?addAccount=true',
+      addingAccount: true,
+    );
 Widget buildMobileGiftOnboardingPasscode(BuildContext context) =>
     const _GiftPreview(initialLocation: '/gift/passcode');
 Widget buildMobileGiftOnboardingCustomise(BuildContext context) =>
@@ -59,6 +65,12 @@ Widget buildMobileGiftOnboardingWalkthrough(BuildContext context) =>
     const _GiftPreview();
 Widget buildMobileGiftOnboardingInspected(BuildContext context) =>
     const _GiftPreview(initialLocation: '/gift', inspected: true);
+Widget buildMobileGiftAddAccountInspected(BuildContext context) =>
+    const _GiftPreview(
+      initialLocation: '/gift?addAccount=true',
+      inspected: true,
+      addingAccount: true,
+    );
 Widget buildMobileGiftOnboardingChecking(BuildContext context) =>
     const _GiftPreview(initialLocation: '/gift', checking: true);
 Widget buildMobileGiftOnboardingLongSyncWarning(BuildContext context) =>
@@ -134,6 +146,7 @@ class _GiftPreview extends StatefulWidget {
     this.failClaim = false,
     this.recoverStorage = false,
     this.walletLinkImport = false,
+    this.addingAccount = false,
   });
   final String initialLocation;
   final bool checking;
@@ -143,6 +156,7 @@ class _GiftPreview extends StatefulWidget {
   final bool failClaim;
   final bool recoverStorage;
   final bool walletLinkImport;
+  final bool addingAccount;
   @override
   State<_GiftPreview> createState() => _GiftPreviewState();
 }
@@ -152,6 +166,7 @@ class _GiftPreviewState extends State<_GiftPreview> {
   late final _accounts = _GiftPreviewAccounts(
     failCreation: widget.failCreation,
     recoverStorage: widget.recoverStorage,
+    addingAccount: widget.addingAccount,
   );
   late final _router = GoRouter(
     initialLocation: widget.initialLocation,
@@ -261,7 +276,12 @@ class _GiftPreviewState extends State<_GiftPreview> {
         ),
       ),
       GoRoute(path: '/welcome', builder: (_, _) => const MobileWelcomeScreen()),
-      GoRoute(path: '/gift', builder: (_, _) => const GiftClaimScreen()),
+      GoRoute(
+        path: '/gift',
+        builder: (_, state) => GiftClaimScreen(
+          addingAccount: state.uri.queryParameters['addAccount'] == 'true',
+        ),
+      ),
       GoRoute(
         path: '/gift/passcode',
         builder: (_, _) => const GiftPasscodeScreen(),
@@ -335,6 +355,7 @@ class _GiftPreviewState extends State<_GiftPreview> {
                     : null,
               ),
             ),
+          giftCardEntryPriceProvider.overrideWith((ref) async => 31.9618),
           accountProvider.overrideWith(() => _accounts),
           appSecurityProvider.overrideWith(_GiftPreviewSecurity.new),
           biometricUnlockProvider.overrideWith(_GiftPreviewBiometrics.new),
@@ -432,13 +453,23 @@ class _GiftPreviewAccounts extends AccountNotifier {
   _GiftPreviewAccounts({
     required this.failCreation,
     required this.recoverStorage,
+    required this.addingAccount,
   });
   final bool failCreation;
   final bool recoverStorage;
+  final bool addingAccount;
   VizorPaymentLink? _pendingGift;
   var _recoveryAttempts = 0;
   @override
-  AccountState build() => const AccountState();
+  AccountState build() => addingAccount
+      ? const AccountState(
+          accounts: [
+            AccountInfo(uuid: 'existing-account', name: 'Personal', order: 0),
+          ],
+          activeAccountUuid: 'existing-account',
+          activeAddress: 'u1existing',
+        )
+      : const AccountState();
 
   @override
   Future<LinkedWalletAccountsImportResult> importLinkedWalletAccounts({
@@ -590,11 +621,12 @@ class _GiftPreviewAccounts extends AccountNotifier {
     state = AsyncData(
       AccountState(
         accounts: [
+          ...state.requireValue.accounts,
           AccountInfo(
             uuid: 'gift-preview',
             name: name,
             profilePictureId: profilePictureId,
-            order: 0,
+            order: state.requireValue.accounts.length,
             setupPending: true,
             giftEducationPending: true,
             birthdayHeight: link.birthdayHeight,
@@ -639,6 +671,9 @@ class _GiftPreviewSecurity extends AppSecurityNotifier {
 
   @override
   String requireSessionPasswordForNativeSecretUse() => _passcode;
+  @override
+  Future<void> completePasswordSetup() async => commitPasswordSetup();
+
   @override
   void commitPasswordSetup() => state = const AppSecurityState(
     isPasswordConfigured: true,
@@ -881,6 +916,7 @@ class _InspectedGiftFlow extends GiftClaimFlowNotifier {
     phase: GiftClaimPhase.inspected,
     inspection: _previewInspection(_link),
     setupPasscode: setupPasscode,
+    walletSetupInProgress: setupPasscode != null,
   );
 }
 

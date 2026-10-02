@@ -1655,7 +1655,6 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     final epoch = _mobileNavigationEpoch;
     setState(() {
       _operationInProgress = true;
-      _redeemState = PaymentLinkRedeemVisualState.loading;
       _retryLink = null;
       _redeemFromQrCode = false;
     });
@@ -1670,6 +1669,7 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
       }
       final link = VizorPaymentLink.parse(rawLink);
       if (!mounted) return;
+      setState(() => _redeemState = PaymentLinkRedeemVisualState.loading);
       await _prepareDecodedPaymentLink(link);
     } catch (_) {
       if (mounted && _isCurrentNavigation(epoch)) {

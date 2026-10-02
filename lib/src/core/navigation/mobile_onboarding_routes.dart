@@ -39,8 +39,12 @@ import '../../features/onboarding/shared/onboarding_flow_args.dart';
 List<RouteBase> mobileOnboardingRoutes() => [
   GoRoute(
     path: '/gift',
-    pageBuilder: (_, state) =>
-        _mobileOnboardingPage(state, child: const GiftClaimScreen()),
+    pageBuilder: (_, state) => _mobileOnboardingPage(
+      state,
+      child: GiftClaimScreen(
+        addingAccount: state.uri.queryParameters['addAccount'] == 'true',
+      ),
+    ),
   ),
   GoRoute(
     path: '/gift/passcode',
@@ -71,7 +75,7 @@ List<RouteBase> mobileOnboardingRoutes() => [
         state,
         child: GiftCustomiseAccountScreen(
           args: GiftCustomiseAccountArgs(
-            passcode: setup.setupPasscode!,
+            passcode: setup.setupPasscode,
             inspection: setup.inspection!,
           ),
         ),

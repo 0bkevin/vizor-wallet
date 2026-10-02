@@ -96,6 +96,314 @@ void main() {
     requireUnlockedSession: true,
   );
 
+  for (final key in ['zcash_account_mnemonic_uuid-1', 'zcash_accounts']) {
+    test(
+      'Wallet Link preserves its credential and recovers after $key fails',
+      () async {
+        final security = container.read(appSecurityProvider.notifier);
+        await security.preparePasswordSetup(_passcode);
+        storage.failNextWriteFor(key);
+        const entries = [
+          LinkedWalletAccountImport(
+            name: _name,
+            birthdayHeight: 3000000,
+            zip32AccountIndex: 0,
+            isHardware: false,
+            isSeedAnchor: true,
+            mnemonic: _mnemonic,
+            bip39Passphrase: 'linked passphrase',
+            profilePictureId: _profile,
+            sourceAccountUuid: 'source-1',
+          ),
+        ];
+        await expectLater(
+          accounts().importLinkedWalletAccounts(
+            network: kZcashDefaultNetworkName,
+            accountsToImport: entries,
+          ),
+          throwsA(isA<WalletAccountSetupInterruptedException>()),
+        );
+        expect(_rust.listedAccounts, hasLength(1));
+        await security.finishPasswordSetupAfterFailure(accountMayExist: true);
+        expect(await store.verifyPassword(_passcode), isTrue);
+        expect(jsonDecode((await pending())!)['kind'], 'linked');
+        final restarted = ProviderContainer(
+          overrides: [
+            appBootstrapProvider.overrideWithValue(_bootstrappedGiftAccount()),
+            accountProvider.overrideWith(
+              () => AccountNotifier.testing(store: store),
+            ),
+            appSecurityProvider.overrideWith(
+              () => AppSecurityNotifier.testing(store: store),
+            ),
+          ],
+        );
+        addTearDown(restarted.dispose);
+        await restarted.read(accountProvider.future);
+        await restarted.read(accountProvider.notifier).restoreAfterUnlock();
+        expect(_rust.importCalls, 1);
+        final secret = await store.readAccountSoftwareWalletSecret('uuid-1');
+        expect(secret!.mnemonic, _mnemonic);
+        expect(secret.bip39Passphrase, 'linked passphrase');
+        final account = restarted.read(accountProvider).value!.activeAccount!;
+        expect(account.name, _name);
+        expect(account.profilePictureId, normalizeProfilePictureId(_profile));
+        expect(account.walletLinkSourceAccountUuid, 'source-1');
+        expect(await pending(), isNull);
+      },
+    );
+  }
+
+  for (final scenario in ['added', 'deleted original', 'unsaved']) {
+    test('stale hardware setup journal with $scenario account', () async {
+      storage.failNextDeleteFor(kPendingAccountMnemonicStorageKey);
+      await accounts().importKeystoneAccount(
+        name: 'Keystone',
+        ufvk: 'hardware-ufvk',
+        seedFingerprint: List.filled(32, 1),
+        zip32Index: 0,
+        birthdayHeight: 3000000,
+      );
+      expect(await pending(), isNotNull);
+      await accounts().createAccountFromMnemonic(
+        mnemonic: _mnemonic,
+        name: 'Added account',
+        profilePictureId: _profile,
+      );
+      final current = container
+          .read(accountProvider)
+          .requireValue
+          .accounts
+          .where((a) => scenario != 'deleted original' || a.uuid != 'hardware')
+          .toList();
+      // Model the persisted account list and Rust bootstrap after restart.
+      await store.writeString(
+        'zcash_accounts',
+        jsonEncode([
+          for (final account in current)
+            if (scenario != 'unsaved' || account.uuid == 'hardware')
+              account.toJson(),
+        ]),
+      );
+      _rust.listedAccounts = _rust.listedAccounts
+          .where((a) => current.any((saved) => saved.uuid == a.uuid))
+          .toList();
+      final restarted = ProviderContainer(
+        overrides: [
+          appBootstrapProvider.overrideWithValue(
+            _bootstrappedGiftAccount(accounts: current),
+          ),
+          accountProvider.overrideWith(
+            () => AccountNotifier.testing(store: store),
+          ),
+          appSecurityProvider.overrideWith(
+            () => AppSecurityNotifier.testing(store: store),
+          ),
+        ],
+      );
+      addTearDown(restarted.dispose);
+      await restarted.read(accountProvider.future);
+      final restore = restarted
+          .read(accountProvider.notifier)
+          .restoreAfterUnlock();
+      if (scenario == 'unsaved') {
+        await expectLater(restore, throwsStateError);
+        expect(restarted.read(appSecurityProvider).requiresUnlock, isTrue);
+        expect(
+          await store.readPlain(kPendingAccountMnemonicStorageKey),
+          isNotNull,
+        );
+      } else {
+        await restore;
+        expect(restarted.read(appSecurityProvider).requiresUnlock, isFalse);
+        expect(await pending(), isNull);
+        final restored = restarted.read(accountProvider).requireValue.accounts;
+        expect(restored.map((a) => a.toJson()), current.map((a) => a.toJson()));
+        expect(await store.readAccountMnemonic('uuid-1'), _mnemonic);
+        expect(_rust.hardwareImportCalls, 1);
+        expect(_rust.addCalls, 1);
+      }
+    });
+  }
+
+  for (final signer in [
+    HardwareSignerKind.keystone,
+    HardwareSignerKind.ledger,
+  ]) {
+    for (final mixed in [false, true]) {
+      test(
+        'Wallet Link restores $signer metadata after interrupted mixed=$mixed import',
+        () async {
+          final security = container.read(appSecurityProvider.notifier);
+          await security.preparePasswordSetup(_passcode);
+          storage.failNextWriteFor('zcash_accounts');
+          final hardware = LinkedWalletAccountImport(
+            name: 'Hardware wallet',
+            birthdayHeight: 3000000,
+            zip32AccountIndex: 3,
+            isHardware: true,
+            isSeedAnchor: false,
+            hardwareSignerKind: signer,
+            ufvk: 'hardware-ufvk',
+            seedFingerprint: List.filled(32, 1),
+            profilePictureId: _profile,
+            sourceAccountUuid: 'desktop-hardware-uuid',
+          );
+          await expectLater(
+            accounts().importLinkedWalletAccounts(
+              network: kZcashDefaultNetworkName,
+              accountsToImport: [
+                if (mixed)
+                  const LinkedWalletAccountImport(
+                    name: 'Software wallet',
+                    birthdayHeight: 3000000,
+                    zip32AccountIndex: 0,
+                    isHardware: false,
+                    isSeedAnchor: true,
+                    mnemonic: _mnemonic,
+                  ),
+                hardware,
+              ],
+            ),
+            throwsA(isA<WalletAccountSetupInterruptedException>()),
+          );
+          await security.finishPasswordSetupAfterFailure(accountMayExist: true);
+          final restarted = ProviderContainer(
+            overrides: [
+              appBootstrapProvider.overrideWithValue(
+                _bootstrappedGiftAccount(
+                  accounts: [
+                    if (mixed)
+                      const AccountInfo(
+                        uuid: 'uuid-1',
+                        name: 'Software',
+                        order: 0,
+                      ),
+                    AccountInfo(
+                      uuid: 'hardware',
+                      name: 'Hardware',
+                      order: mixed ? 1 : 0,
+                      isHardware: true,
+                      hardwareSignerKind: signer,
+                    ),
+                  ],
+                ),
+              ),
+              accountProvider.overrideWith(
+                () => AccountNotifier.testing(store: store),
+              ),
+              appSecurityProvider.overrideWith(
+                () => AppSecurityNotifier.testing(store: store),
+              ),
+            ],
+          );
+          addTearDown(restarted.dispose);
+          await restarted.read(accountProvider.future);
+          final recovered = restarted.read(accountProvider.notifier);
+          await recovered.restoreAfterUnlock();
+          final account = restarted
+              .read(accountProvider)
+              .value!
+              .accounts
+              .singleWhere((account) => account.uuid == 'hardware');
+          expect(account.name, 'Hardware wallet');
+          expect(account.profilePictureId, normalizeProfilePictureId(_profile));
+          expect(account.walletLinkSourceAccountUuid, 'desktop-hardware-uuid');
+          expect(account.hardwareSignerKind, signer);
+          expect(
+            await recovered.alreadyImportedWalletLinkSourceAccountUuids(
+              network: kZcashDefaultNetworkName,
+              accountsToCheck: [hardware],
+            ),
+            {'desktop-hardware-uuid'},
+          );
+          expect(
+            await store.readAccountSoftwareWalletSecret('hardware'),
+            isNull,
+          );
+          expect(_rust.hardwareImportCalls, 1);
+          expect(_rust.importCalls, mixed ? 1 : 0);
+          expect(await pending(), isNull);
+        },
+      );
+    }
+  }
+
+  test(
+    'Wallet Link recovers every imported account, including a nonzero BIP39 index',
+    () async {
+      await container
+          .read(appSecurityProvider.notifier)
+          .preparePasswordSetup(_passcode);
+      storage.failNextWriteFor('zcash_account_mnemonic_uuid-2');
+      await expectLater(
+        accounts().importLinkedWalletAccounts(
+          network: kZcashDefaultNetworkName,
+          accountsToImport: [
+            for (var index = 0; index < 2; index++)
+              LinkedWalletAccountImport(
+                name: 'Linked $index',
+                birthdayHeight: 3000000,
+                zip32AccountIndex: index,
+                isHardware: false,
+                isSeedAnchor: index == 0,
+                mnemonic: _mnemonic,
+                bip39Passphrase: 'linked passphrase',
+              ),
+          ],
+        ),
+        throwsA(isA<WalletAccountSetupInterruptedException>()),
+      );
+      await container
+          .read(appSecurityProvider.notifier)
+          .finishPasswordSetupAfterFailure(accountMayExist: true);
+      final restarted = ProviderContainer(
+        overrides: [
+          appBootstrapProvider.overrideWithValue(
+            _bootstrappedGiftAccount(
+              accounts: const [
+                AccountInfo(
+                  uuid: 'uuid-1',
+                  name: 'Account 1',
+                  order: 0,
+                  zip32AccountIndex: 0,
+                  isSeedAnchor: true,
+                ),
+                AccountInfo(
+                  uuid: 'uuid-2',
+                  name: 'Account 2',
+                  order: 1,
+                  zip32AccountIndex: 1,
+                ),
+              ],
+            ),
+          ),
+          accountProvider.overrideWith(
+            () => AccountNotifier.testing(store: store),
+          ),
+          appSecurityProvider.overrideWith(
+            () => AppSecurityNotifier.testing(store: store),
+          ),
+        ],
+      );
+      addTearDown(restarted.dispose);
+      await restarted.read(accountProvider.future);
+      await restarted.read(accountProvider.notifier).restoreAfterUnlock();
+      expect(_rust.importCalls, 2);
+      for (final uuid in ['uuid-1', 'uuid-2']) {
+        expect(
+          (await store.readAccountSoftwareWalletSecret(uuid))!.bip39Passphrase,
+          'linked passphrase',
+        );
+      }
+      expect(
+        restarted.read(accountProvider).value!.accounts.map((a) => a.name),
+        ['Linked 0', 'Linked 1'],
+      );
+      expect(await pending(), isNull);
+    },
+  );
+
   test(
     'failed rollback preserves the credential and blocks replacement until cleanup succeeds',
     () async {
@@ -322,6 +630,252 @@ void main() {
     expect(_rust.listCalls, 1);
     expect(_rust.importCalls, 1);
   });
+
+  for (final failSave in [false, true]) {
+    test(
+      'Gift account addition preserves the original wallet: storage failure=$failSave',
+      () async {
+        _rust.walletExists = true;
+        _rust.listedAccounts = [_listed('original')];
+        final existing = ProviderContainer(
+          overrides: [
+            appBootstrapProvider.overrideWithValue(
+              _bootstrappedGiftAccount(
+                account: const AccountInfo(
+                  uuid: 'original',
+                  name: 'Original',
+                  order: 0,
+                  isSeedAnchor: true,
+                ),
+              ),
+            ),
+            accountProvider.overrideWith(
+              () => AccountNotifier.testing(store: store),
+            ),
+            appSecurityProvider.overrideWith(
+              () => AppSecurityNotifier.testing(store: store),
+            ),
+            paymentLinkReceivedStoreProvider.overrideWithValue(cards),
+            rpcEndpointFailoverLatestBlockHeightGetterProvider
+                .overrideWithValue((_, _) async => BigInt.from(3000000)),
+          ],
+        );
+        addTearDown(existing.dispose);
+        await existing.read(accountProvider.future);
+        if (failSave) storage.failNextWriteFor('zcash_account_mnemonic_uuid-1');
+        final create = existing
+            .read(accountProvider.notifier)
+            .createGiftClaimAccount(
+              name: _name,
+              profilePictureId: _profile,
+              link: incomingLink,
+            );
+        if (failSave) {
+          await expectLater(
+            create,
+            throwsA(isA<GiftClaimAccountCreatedException>()),
+          );
+          await existing
+              .read(accountProvider.notifier)
+              .recoverPendingAccountMnemonic();
+        } else {
+          expect(await create, 'uuid-1');
+        }
+        expect(_rust.importCalls, 0);
+        expect(_rust.addCalls, 1);
+        expect(_rust.listedAccounts.map((a) => a.uuid), ['original', 'uuid-1']);
+        final state = existing.read(accountProvider).value!;
+        expect(state.accounts.map((a) => a.uuid), ['original', 'uuid-1']);
+        expect(state.activeAccount!.isSeedAnchor, isFalse);
+        expect(state.activeAccount!.setupPending, isTrue);
+        expect(state.activeAccount!.giftEducationPending, isTrue);
+        expect(await store.readAccountMnemonic('uuid-1'), _mnemonic);
+        expect(await store.verifyPassword(_passcode), isTrue);
+        expect(
+          (await cards.find(incomingLink.address))?.setupAccountUuid,
+          'uuid-1',
+        );
+      },
+    );
+  }
+
+  for (final failRecoveryWrite in [false, true]) {
+    test(
+      'Gift recovery selects the added account after restart: retry=$failRecoveryWrite',
+      () async {
+        const original = AccountInfo(
+          uuid: 'original',
+          name: 'Original',
+          order: 0,
+          isSeedAnchor: true,
+        );
+        _rust.walletExists = true;
+        _rust.listedAccounts = [_listed('original')];
+        await store.writeString('zcash_active_account', 'original');
+        final existing = ProviderContainer(
+          overrides: [
+            appBootstrapProvider.overrideWithValue(
+              _bootstrappedGiftAccount(account: original),
+            ),
+            accountProvider.overrideWith(
+              () => AccountNotifier.testing(store: store),
+            ),
+            appSecurityProvider.overrideWith(
+              () => AppSecurityNotifier.testing(store: store),
+            ),
+            paymentLinkReceivedStoreProvider.overrideWithValue(cards),
+            rpcEndpointFailoverLatestBlockHeightGetterProvider
+                .overrideWithValue((_, _) async => BigInt.from(3000000)),
+          ],
+        );
+        addTearDown(existing.dispose);
+        await existing.read(accountProvider.future);
+        storage.failNextWriteFor('zcash_active_account');
+        await expectLater(
+          existing
+              .read(accountProvider.notifier)
+              .createGiftClaimAccount(
+                name: _name,
+                profilePictureId: _profile,
+                link: incomingLink,
+              ),
+          throwsA(isA<GiftClaimAccountCreatedException>()),
+        );
+        final savedAccounts =
+            (jsonDecode((await store.readString('zcash_accounts'))!) as List)
+                .map((json) => AccountInfo.fromJson(json))
+                .toList();
+        expect(await store.readString('zcash_active_account'), 'original');
+
+        // Bootstrap still selects the previously persisted, valid account.
+        final restarted = ProviderContainer(
+          overrides: [
+            appBootstrapProvider.overrideWithValue(
+              _bootstrappedGiftAccount(accounts: savedAccounts),
+            ),
+            accountProvider.overrideWith(
+              () => AccountNotifier.testing(store: store),
+            ),
+            paymentLinkReceivedStoreProvider.overrideWithValue(cards),
+          ],
+        );
+        addTearDown(restarted.dispose);
+        await restarted.read(accountProvider.future);
+        final notifier = restarted.read(accountProvider.notifier);
+        if (failRecoveryWrite) {
+          storage.failNextWriteFor('zcash_active_account');
+          await expectLater(
+            notifier.recoverPendingAccountMnemonic(),
+            throwsA(isA<StateError>()),
+          );
+          expect(await pending(), isNotNull);
+          expect(await store.readString('zcash_active_account'), 'original');
+          expect(restarted.read(accountSetupRecoveryGenerationProvider), 0);
+        }
+        await notifier.recoverPendingAccountMnemonic();
+        expect(await store.readString('zcash_active_account'), 'uuid-1');
+        final recovered = restarted.read(accountProvider).value!;
+        expect(recovered.activeAccountUuid, 'uuid-1');
+        expect(recovered.activeAddress, isNull);
+        expect(recovered.accounts.map((a) => a.uuid), ['original', 'uuid-1']);
+        expect((await cards.load()).single.setupAccountUuid, 'uuid-1');
+        expect(await pending(), isNull);
+        expect(restarted.read(accountSetupRecoveryGenerationProvider), 1);
+        await notifier.restoreAfterUnlock();
+        expect(
+          restarted.read(accountProvider).value!.activeAddress,
+          'u1uuid-1',
+        );
+        expect(_rust.addCalls, 1);
+      },
+    );
+  }
+
+  for (final ledger in [false, true]) {
+    test(
+      'first hardware account restores its metadata after save failure: ledger=$ledger',
+      () async {
+        final security = container.read(appSecurityProvider.notifier);
+        await security.preparePasswordSetup(_passcode);
+        storage.failNextWriteFor('zcash_accounts');
+        final import = ledger
+            ? accounts().importLedgerAccount(
+                name: _name,
+                ufvk: 'fixture',
+                seedFingerprint: List.filled(32, 1),
+                zip32Index: 0,
+                birthdayHeight: 3000000,
+                profilePictureId: _profile,
+                connectionTransport: LedgerConnectionTransport.bluetooth,
+                ledgerDeviceId: 'ledger-device-id',
+                ledgerDeviceName: 'Ledger Flex',
+                ledgerDeviceModel: 'flex',
+              )
+            : accounts().importKeystoneAccount(
+                name: _name,
+                ufvk: 'fixture',
+                seedFingerprint: List.filled(32, 1),
+                zip32Index: 0,
+                birthdayHeight: 3000000,
+                profilePictureId: _profile,
+              );
+        await expectLater(
+          import,
+          throwsA(isA<WalletAccountSetupInterruptedException>()),
+        );
+        await security.finishPasswordSetupAfterFailure(accountMayExist: true);
+        expect(await store.verifyPassword(_passcode), isTrue);
+        expect(_rust.listedAccounts.single.isHardware, isTrue);
+        expect(jsonDecode((await pending())!)['kind'], 'linked');
+
+        final restarted = ProviderContainer(
+          overrides: [
+            appBootstrapProvider.overrideWithValue(
+              _bootstrappedGiftAccount(
+                account: AccountInfo(
+                  uuid: 'hardware',
+                  name: 'Hardware',
+                  order: 0,
+                  isHardware: true,
+                  hardwareSignerKind: ledger
+                      ? HardwareSignerKind.ledger
+                      : HardwareSignerKind.keystone,
+                ),
+              ),
+            ),
+            accountProvider.overrideWith(
+              () => AccountNotifier.testing(store: store),
+            ),
+            appSecurityProvider.overrideWith(
+              () => AppSecurityNotifier.testing(store: store),
+            ),
+          ],
+        );
+        addTearDown(restarted.dispose);
+        await restarted.read(accountProvider.future);
+        await restarted.read(accountProvider.notifier).restoreAfterUnlock();
+
+        final recovered = restarted.read(accountProvider).value!.activeAccount!;
+        expect(recovered.name, _name);
+        expect(recovered.profilePictureId, normalizeProfilePictureId(_profile));
+        expect(
+          recovered.hardwareSignerKind,
+          ledger ? HardwareSignerKind.ledger : HardwareSignerKind.keystone,
+        );
+        expect(recovered.birthdayHeight, 3000000);
+        expect(recovered.zip32AccountIndex, 0);
+        expect(
+          recovered.ledgerLastTransport,
+          ledger ? LedgerConnectionTransport.bluetooth : null,
+        );
+        expect(recovered.ledgerDeviceId, ledger ? 'ledger-device-id' : null);
+        expect(recovered.ledgerDeviceName, ledger ? 'Ledger Flex' : null);
+        expect(recovered.ledgerDeviceModel, ledger ? 'flex' : null);
+        expect(_rust.hardwareImportCalls, 1);
+        expect(await pending(), isNull);
+      },
+    );
+  }
 
   test('an existing account blocks first-wallet replacement', () async {
     _rust
@@ -1006,8 +1560,8 @@ AppBootstrapState _bootstrappedGiftAccount({
                 isSeedAnchor: true,
               ),
         ],
-    activeAccountUuid: 'uuid-1',
-    activeAddress: 'u1uuid-1',
+    activeAccountUuid: accounts?.first.uuid ?? account?.uuid ?? 'uuid-1',
+    activeAddress: 'u1${accounts?.first.uuid ?? account?.uuid ?? 'uuid-1'}',
   ),
   initialSyncSnapshot: AppSyncSnapshot.empty,
   network: kZcashDefaultNetworkName,
@@ -1033,6 +1587,9 @@ class _GiftAccountRustApi implements RustLibApi {
   bool importedAdditionalAccount = false;
   String? importedDbPath;
   int importCalls = 0;
+  int addCalls = 0;
+  int hardwareImportCalls = 0;
+  final hardwareUfvks = <String, String>{};
   int listCalls = 0;
 
   void reset() {
@@ -1048,6 +1605,9 @@ class _GiftAccountRustApi implements RustLibApi {
     importedAdditionalAccount = false;
     importedDbPath = null;
     importCalls = 0;
+    addCalls = 0;
+    hardwareImportCalls = 0;
+    hardwareUfvks.clear();
     listCalls = 0;
   }
 
@@ -1066,6 +1626,69 @@ class _GiftAccountRustApi implements RustLibApi {
     if (listError case final error?) throw error;
     return listedAccounts;
   }
+
+  @override
+  Future<rust_wallet.AccountCreationResult> crateApiWalletAddAccount({
+    required String dbPath,
+    required String network,
+    required String name,
+    required String mnemonic,
+    required String bip39Passphrase,
+    BigInt? birthdayHeight,
+  }) async {
+    addCalls++;
+    pendingAtImport = await store.readSecretStringWithOptions(
+      kPendingAccountMnemonicStorageKey,
+      requireUnlockedSession: true,
+    );
+    listedAccounts = [...listedAccounts, _listed('uuid-1')];
+    accountForMnemonic = 'uuid-1';
+    return const rust_wallet.AccountCreationResult(
+      accountUuid: 'uuid-1',
+      unifiedAddress: 'u1uuid-1',
+    );
+  }
+
+  @override
+  Future<rust_wallet.AccountCreationResult>
+  crateApiWalletImportHardwareAccount({
+    required String dbPath,
+    required String network,
+    required String name,
+    required String ufvkString,
+    required List<int> seedFingerprint,
+    required int zip32Index,
+    BigInt? birthdayHeight,
+    required String hardwareSignerKind,
+  }) async {
+    walletExists = true;
+    File(dbPath).writeAsStringSync('hardware account database');
+    hardwareImportCalls++;
+    hardwareUfvks['hardware'] = ufvkString;
+    listedAccounts = [
+      ...listedAccounts,
+      rust_wallet.AccountInfo(
+        uuid: 'hardware',
+        name: _name,
+        unifiedAddress: 'u1hardware',
+        birthdayHeight: 3000000,
+        isSeedAnchor: false,
+        isHardware: true,
+        hardwareSignerKind: hardwareSignerKind,
+      ),
+    ];
+    return const rust_wallet.AccountCreationResult(
+      accountUuid: 'hardware',
+      unifiedAddress: 'u1hardware',
+    );
+  }
+
+  @override
+  Future<String> crateApiWalletGetAccountUfvk({
+    required String dbPath,
+    required String network,
+    required String accountUuid,
+  }) async => hardwareUfvks[accountUuid]!;
 
   @override
   Future<rust_wallet.WalletImportResult> crateApiWalletImportWallet({
@@ -1094,6 +1717,40 @@ class _GiftAccountRustApi implements RustLibApi {
     return const rust_wallet.WalletImportResult(
       unifiedAddress: 'u1uuid-1',
       accountUuid: 'uuid-1',
+    );
+  }
+
+  @override
+  Future<rust_wallet.SoftwareWalletImportAccount>
+  crateApiWalletImportSoftwareAccountAtIndex({
+    required String mnemonic,
+    required String bip39Passphrase,
+    BigInt? birthdayHeight,
+    required String network,
+    required String dbPath,
+    required String name,
+    required int zip32AccountIndex,
+    required bool isFirstWalletAccount,
+  }) async {
+    importCalls++;
+    importedDbPath = dbPath;
+    pendingAtImport = await store.readSecretStringWithOptions(
+      kPendingAccountMnemonicStorageKey,
+      requireUnlockedSession: true,
+    );
+    File(dbPath).writeAsStringSync('linked account database');
+    walletExists = true;
+    importedBip39Passphrase = bip39Passphrase;
+    accountForMnemonic = 'uuid-1';
+    if (zip32AccountIndex == 1) importedAdditionalAccount = true;
+    final uuid = 'uuid-${zip32AccountIndex + 1}';
+    listedAccounts = [...listedAccounts, _listed(uuid)];
+    return rust_wallet.SoftwareWalletImportAccount(
+      accountUuid: uuid,
+      unifiedAddress: 'u1$uuid',
+      zip32AccountIndex: zip32AccountIndex,
+      name: name,
+      isSeedAnchor: isFirstWalletAccount,
     );
   }
 

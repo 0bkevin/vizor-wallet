@@ -232,23 +232,114 @@ void main() {
     cleanup.complete();
   });
 
-  for (final accountCreated in [false, true]) {
-    test(
-      'finishing setup with accountCreated=$accountCreated releases only an abandoned inspection',
-      () async {
-        final container = makeContainer();
-        final inspection = _inspection(incomingLink);
-        flow(container).beginWalletSetup(inspection, passcode: '135790');
-        if (accountCreated) wallet.create();
-        flow(container).finishWalletSetup(inspection);
-        // A repeated dispose must not clean up or clear any newer flow.
-        flow(container).finishWalletSetup(inspection);
-        await pumpEventQueue();
-        expect(container.read(giftClaimFlowProvider), isNull);
-        expect(operations.discarded, accountCreated ? isEmpty : [inspection]);
-      },
-    );
+  for (final existingWallet in [false, true]) {
+    for (final handedOff in [false, true]) {
+      test(
+        'setup cleanup follows its handoff=$handedOff with existingWallet=$existingWallet',
+        () async {
+          final container = makeContainer();
+          if (existingWallet) wallet.create();
+          final inspection = _inspection(incomingLink);
+          final intake = container.read(paymentLinkIntakeProvider.notifier);
+          intake.receive(incomingLink.toUri().toString());
+          intake.receive(secondIncomingLink.toUri().toString());
+          flow(container).beginWalletSetup(
+            inspection,
+            passcode: existingWallet ? null : '135790',
+          );
+          if (handedOff) wallet.create();
+          flow(container).finishWalletSetup(inspection, handedOff: handedOff);
+          // A repeated dispose must not clean up a handed-off inspection.
+          flow(container).finishWalletSetup(inspection);
+          await pumpEventQueue();
+          expect(container.read(giftClaimFlowProvider), isNull);
+          expect(operations.discarded, handedOff ? isEmpty : [inspection]);
+          final pending = container
+              .read(paymentLinkIntakeProvider)
+              .pendingLinks;
+          expect(pending, hasLength(handedOff ? 2 : 1));
+          expect(
+            pending.last.hasSameCanonicalPayload(secondIncomingLink),
+            isTrue,
+          );
+          expect(
+            pending.any((link) => link.hasSameCanonicalPayload(incomingLink)),
+            handedOff,
+          );
+        },
+      );
+    }
   }
+
+  test('late import completion does not clear a newer Gift screen', () async {
+    final container = makeContainer();
+    wallet.create();
+    flow(container).open(incomingLink);
+    final earlier = _inspection(incomingLink);
+    operations.completeNext(earlier);
+    await pumpEventQueue();
+    flow(container).finishImportSetup(earlier);
+    expect(operations.discarded, isEmpty);
+
+    flow(container).open(secondIncomingLink);
+    operations.completeNext(_inspection(secondIncomingLink));
+    await pumpEventQueue();
+    final newer = container.read(giftClaimFlowProvider);
+    flow(container).finishImportSetup(earlier);
+    expect(container.read(giftClaimFlowProvider), same(newer));
+    expect(newer?.link, secondIncomingLink);
+    expect(operations.discarded, isEmpty);
+  });
+
+  test('abandoned additional setup waits for unlock before cleanup', () async {
+    final container = makeContainer();
+    wallet.create();
+    final security =
+        container.read(appSecurityProvider.notifier) as _NoWalletSecurity;
+    security.setUnlocked();
+    final inspection = _inspection(incomingLink);
+    flow(container).beginWalletSetup(inspection);
+    security.setLocked();
+    flow(container).finishWalletSetup(inspection);
+    await pumpEventQueue();
+    expect(operations.discardStarted, isEmpty);
+
+    // The same claim wallet cannot be inspected again before cleanup finishes.
+    flow(container).open(incomingLink);
+    await pumpEventQueue();
+    expect(operations.inspected, isEmpty);
+    security.setUnlocked();
+    await pumpEventQueue();
+    expect(operations.discarded, [inspection]);
+    expect(operations.inspected, [incomingLink]);
+    operations.completeNext(_inspection(incomingLink));
+    await pumpEventQueue();
+  });
+
+  test(
+    'cleanup retries if the ownership check was interrupted by lock',
+    () async {
+      final container = makeContainer();
+      wallet.create();
+      final security =
+          container.read(appSecurityProvider.notifier) as _NoWalletSecurity;
+      security.setUnlocked();
+      final inspection = _inspection(incomingLink);
+      flow(container).beginWalletSetup(inspection);
+      final gate = Completer<void>();
+      operations.discardGate = gate;
+      flow(container).finishWalletSetup(inspection);
+      await pumpEventQueue();
+      expect(operations.discardStarted, [inspection]);
+      security.setLocked();
+      gate.complete();
+      await pumpEventQueue();
+      expect(operations.discardStarted, [inspection]);
+      security.setUnlocked();
+      await pumpEventQueue();
+      expect(operations.discardStarted, [inspection, inspection]);
+    },
+  );
 
   test('setup keeps the claim wallet and queues the link', () async {
     final container = makeContainer();
@@ -467,6 +558,16 @@ class _FlowOperations implements PaymentLinkOperations {
 }
 
 class _NoWalletSecurity extends AppSecurityNotifier {
+  void setLocked() => state = const AppSecurityState(
+    isPasswordConfigured: true,
+    isUnlocked: false,
+  );
+
+  void setUnlocked() => state = const AppSecurityState(
+    isPasswordConfigured: true,
+    isUnlocked: true,
+  );
+
   @override
   AppSecurityState build() =>
       const AppSecurityState(isPasswordConfigured: false, isUnlocked: false);

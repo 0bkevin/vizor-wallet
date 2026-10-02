@@ -14,6 +14,8 @@ import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_icon.dart';
 import '../../../core/widgets/app_toast.dart';
 import '../../../providers/rpc_endpoint_provider.dart';
+import '../../../providers/zec_price_change_provider.dart';
+import '../providers/gift_card_entry_price_provider.dart';
 import '../../../providers/account_provider.dart';
 import '../../swap/models/swap_fiat_value_formatting.dart';
 import '../models/vizor_payment_link.dart';
@@ -35,11 +37,16 @@ import '../widgets/payment_link_long_sync_warning.dart';
 import '../../onboarding/mobile/mobile_onboarding_progress.dart';
 import '../../onboarding/mobile/mobile_onboarding_progress_scope.dart';
 
-/// `/gift`: a Gift Card opened on a device without a wallet. The card is
+/// `/gift`: a Gift Card opened from Welcome or Add account. The card is
 /// checked without an account; the recipient then creates or brings a wallet
 /// to claim it.
 class GiftClaimScreen extends ConsumerStatefulWidget {
-  const GiftClaimScreen({super.key});
+  const GiftClaimScreen({this.addingAccount = false, super.key});
+
+  /// Whether the Gift flow was opened from an existing wallet's Add account
+  /// screen. The flow creates an account in that wallet instead of creating a
+  /// new wallet.
+  final bool addingAccount;
 
   @override
   ConsumerState<GiftClaimScreen> createState() => _GiftClaimScreenState();
@@ -85,7 +92,13 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
   Future<void> _close() async {
     try {
       await ref.read(giftClaimFlowProvider.notifier).close();
-      if (mounted) context.go('/welcome');
+      if (mounted) {
+        context.go(
+          ref.read(accountProvider).value?.hasAccounts == true
+              ? '/add-account'
+              : '/welcome',
+        );
+      }
     } catch (_) {
       if (mounted) {
         showAppToast(
@@ -151,7 +164,15 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
     _handingOff = true;
     try {
       await ref.read(giftClaimFlowProvider.notifier).cancelSetupReturn();
-      if (mounted) context.push('/gift/passcode');
+      if (!mounted) return;
+      if (ref.read(accountProvider).value?.hasAccounts == true) {
+        final inspection = ref.read(giftClaimFlowProvider)?.inspection;
+        if (inspection == null) return;
+        ref.read(giftClaimFlowProvider.notifier).beginWalletSetup(inspection);
+        context.push('/gift/customise');
+      } else {
+        context.push('/gift/passcode');
+      }
     } catch (_) {
       if (mounted) {
         showAppToast(
@@ -205,6 +226,7 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(giftCardEntryPriceProvider);
     final flow = ref.watch(giftClaimFlowProvider);
     if (flow == null) {
       return _guardBack(
@@ -212,14 +234,13 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
           backgroundColor: context.colors.background.window,
           body: SafeArea(
             child: MobileGiftCardEntryView(
-              state: _reading
-                  ? PaymentLinkRedeemMobileState.loading
-                  : _invalidPaste
+              addingAccount: widget.addingAccount,
+              state: _invalidPaste
                   ? PaymentLinkRedeemMobileState.invalid
                   : PaymentLinkRedeemMobileState.paste,
               onBack: _close,
-              onPaste: _paste,
-              onScan: _scan,
+              onPaste: _reading ? null : _paste,
+              onScan: _reading ? null : _scan,
             ),
           ),
         ),
@@ -284,7 +305,10 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
                                   ),
                                 ),
                                 SizedBox(height: gap),
-                                _GiftClaimStatus(flow: flow),
+                                _GiftClaimStatus(
+                                  flow: flow,
+                                  addingAccount: widget.addingAccount,
+                                ),
                               ],
                             );
                           },
@@ -307,7 +331,10 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
                             else
                               _card(flow.link, celebrate: false),
                             const SizedBox(height: AppSpacing.md),
-                            _GiftClaimStatus(flow: flow),
+                            _GiftClaimStatus(
+                              flow: flow,
+                              addingAccount: widget.addingAccount,
+                            ),
                           ],
                         ),
                       ),
@@ -316,6 +343,7 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
                 padding: const EdgeInsets.all(AppSpacing.md),
                 child: _GiftClaimActions(
                   flow: flow,
+                  addingAccount: widget.addingAccount,
                   onCreate: _createGiftWallet,
                   onExisting: () => _continueToSetup('/onboarding/method'),
                   onClose: _close,
@@ -360,9 +388,14 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
       cardWidth: kPaymentLinkMobileCardWidth,
       cardHeight: kPaymentLinkMobileCardHeight,
       amountText: formatZecAmount(link.amountZatoshi),
-      supportingText: snapshot == null || !ref.watch(swapFeatureEnabledProvider)
+      supportingText: !ref.watch(swapFeatureEnabledProvider)
           ? null
-          : swapFormatCompactFiatValue(snapshot.amount),
+          : snapshot != null
+          ? swapFormatCompactFiatValue(snapshot.amount)
+          : fiatTextForZatoshi(
+              link.amountZatoshi,
+              zecUsdUnitPrice: ref.watch(giftCardEntryPriceProvider).value,
+            ),
       showCaret: false,
       onTap: message.isEmpty ? null : () => setState(() => _showsBack = true),
       semanticLabel: message.isEmpty
@@ -427,13 +460,15 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
   }
 }
 
-/// Walletless Gift Card entry from Figma `Redeed a Card` (8604:37897).
+/// Gift Card entry from Figma `Redeed a Card` (8604:37897).
 ///
 /// The regular payment-link redeem surface remains shared by an existing
-/// wallet. This entry explains that redeeming the Card creates a new wallet,
-/// and therefore keeps its own title, progress, and supporting copy.
+/// wallet. This entry explains that redeeming the Card creates either a new
+/// wallet or an account in the current wallet, and therefore keeps its own
+/// title, progress, and supporting copy.
 class MobileGiftCardEntryView extends StatelessWidget {
   const MobileGiftCardEntryView({
+    this.addingAccount = false,
     required this.state,
     required this.onBack,
     required this.onPaste,
@@ -441,10 +476,11 @@ class MobileGiftCardEntryView extends StatelessWidget {
     super.key,
   });
 
+  final bool addingAccount;
   final PaymentLinkRedeemMobileState state;
   final VoidCallback onBack;
-  final VoidCallback onPaste;
-  final VoidCallback onScan;
+  final VoidCallback? onPaste;
+  final VoidCallback? onScan;
 
   @override
   Widget build(BuildContext context) {
@@ -472,7 +508,9 @@ class MobileGiftCardEntryView extends StatelessWidget {
             child: Column(
               children: [
                 Text(
-                  'Create wallet by redeeming Vizor Gift Card',
+                  addingAccount
+                      ? 'Create account by redeeming Vizor Gift Card'
+                      : 'Create wallet by redeeming Vizor Gift Card',
                   key: const ValueKey('gift_walletless_entry_title'),
                   textAlign: TextAlign.center,
                   style: AppTypography.displayLarge.copyWith(
@@ -514,7 +552,9 @@ class MobileGiftCardEntryView extends StatelessWidget {
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 233),
                   child: Text(
-                    'Create a new Vizor wallet to receive the card’s balance.',
+                    addingAccount
+                        ? 'Create a new account to receive the card’s balance.'
+                        : 'Create a new Vizor wallet to receive the card’s balance.',
                     key: const ValueKey('gift_walletless_entry_explanation'),
                     textAlign: TextAlign.center,
                     style: AppTypography.bodyMediumStrong.copyWith(
@@ -638,13 +678,14 @@ class _GiftArrivalHeading extends StatelessWidget {
 
 /// What the check found, always as text rather than color alone.
 class _GiftClaimStatus extends StatelessWidget {
-  const _GiftClaimStatus({required this.flow});
+  const _GiftClaimStatus({required this.flow, required this.addingAccount});
 
   final GiftClaimFlowState flow;
+  final bool addingAccount;
 
   @override
   Widget build(BuildContext context) {
-    final (title, detail, tone) = _describe(flow);
+    final (title, detail, tone) = _describe(flow, addingAccount: addingAccount);
     final colors = context.colors;
     return Semantics(
       liveRegion: true,
@@ -676,7 +717,10 @@ class _GiftClaimStatus extends StatelessWidget {
     );
   }
 
-  static (String, String?, _Tone) _describe(GiftClaimFlowState flow) {
+  static (String, String?, _Tone) _describe(
+    GiftClaimFlowState flow, {
+    required bool addingAccount,
+  }) {
     switch (flow.phase) {
       case GiftClaimPhase.checking:
       case GiftClaimPhase.longSyncConfirmation:
@@ -709,7 +753,9 @@ class _GiftClaimStatus extends StatelessWidget {
             !inspection.waitingForFundingConfirmations)) {
           return (
             'Gift found',
-            'Create a wallet or use one you have to claim it.',
+            addingAccount
+                ? 'Create an account or use one you have to claim it.'
+                : 'Create a wallet or use one you have to claim it.',
             _Tone.neutral,
           );
         }
@@ -718,7 +764,9 @@ class _GiftClaimStatus extends StatelessWidget {
             'Waiting for the deposit to confirm · '
                 '${inspection.fundingConfirmationCount} of '
                 '$kPaymentLinkClaimConfirmationTarget',
-            'You can create your wallet now.',
+            addingAccount
+                ? 'You can create your account now.'
+                : 'You can create your wallet now.',
             _Tone.neutral,
           );
         }
@@ -744,12 +792,14 @@ enum _Tone { neutral, problem }
 class _GiftClaimActions extends ConsumerWidget {
   const _GiftClaimActions({
     required this.flow,
+    required this.addingAccount,
     required this.onCreate,
     required this.onExisting,
     required this.onClose,
   });
 
   final GiftClaimFlowState flow;
+  final bool addingAccount;
   final VoidCallback onCreate;
   final VoidCallback onExisting;
   final VoidCallback onClose;
@@ -765,7 +815,12 @@ class _GiftClaimActions extends ConsumerWidget {
             inspection.waitingForFundingConfirmations);
     final List<Widget> actions = switch (flow.phase) {
       GiftClaimPhase.checking || GiftClaimPhase.longSyncConfirmation => [
-        _primary('Create a wallet to claim', null),
+        _primary(
+          addingAccount
+              ? 'Create an account to claim'
+              : 'Create a wallet to claim',
+          null,
+        ),
         _secondary('Claim with an existing wallet', null),
       ],
       GiftClaimPhase.failed =>
@@ -773,7 +828,12 @@ class _GiftClaimActions extends ConsumerWidget {
             ? [_primary('Try again', notifier.recheck)]
             : [_secondary('Go back', onClose)],
       GiftClaimPhase.inspected when canClaimLater => [
-        _primary('Create a wallet to claim', onCreate),
+        _primary(
+          addingAccount
+              ? 'Create an account to claim'
+              : 'Create a wallet to claim',
+          onCreate,
+        ),
         _secondary('Claim with an existing wallet', onExisting),
       ],
       GiftClaimPhase.inspected => [
