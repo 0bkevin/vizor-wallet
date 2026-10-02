@@ -77,10 +77,12 @@ import 'src/features/onboarding/mobile/mobile_unlock_screen.dart';
 import 'src/features/onboarding/unlock_screen.dart';
 import 'src/features/onboarding/welcome.dart';
 import 'src/features/pay/screens/pay_screen.dart';
+import 'src/features/payment_links/widgets/gift_claim_failure_toast_listener.dart';
 import 'src/features/payment_links/models/vizor_payment_link.dart';
 import 'src/features/payment_links/providers/payment_link_cards_provider.dart';
 import 'src/features/payment_links/providers/payment_link_claim_coordinator_provider.dart';
 import 'src/features/payment_links/providers/payment_link_intake_provider.dart';
+import 'src/features/payment_links/providers/gift_claim_flow_provider.dart';
 import 'src/features/payment_links/screens/payment_links_screen.dart';
 import 'src/features/payment_links/services/payment_link_entry_policy.dart';
 import 'src/features/receive/screens/receive_screen.dart';
@@ -518,6 +520,19 @@ String? appRedirect({
   if (isStorageUnavailable) {
     if (!hasWallet) return '/welcome';
     return requiresUnlock ? '/unlock' : '/home';
+  }
+  // Creating the account does not finish its storage. Keep that setup
+  // actionable on this screen; locking still takes precedence.
+  if (hasWallet &&
+      kAppFormFactor == AppFormFactor.mobile &&
+      ref.read(giftClaimFlowProvider)?.walletSetupInProgress == true &&
+      state.matchedLocation == '/gift/customise') {
+    return requiresUnlock ? '/unlock' : null;
+  }
+  if (_isRouteOrChild(state.matchedLocation, '/gift')) {
+    if (kAppFormFactor != AppFormFactor.mobile) return '/';
+    if (hasWallet) return requiresUnlock ? '/unlock' : '/payment-links';
+    return null;
   }
   if (!hasWallet && isUnlockFlow) return '/welcome';
   if (!hasWallet && !isOnboarding && !isPublicLegal && !isUninstall) {
@@ -1190,6 +1205,7 @@ List<RouteBase> _desktopRoutes(Ref ref) => [
   GoRoute(
     path: '/payment-links',
     builder: (_, state) => PaymentLinksScreen(
+      initialReceivedCardAddress: state.uri.queryParameters['received'],
       initialCards: state.extra is PaymentLinkCardsSnapshot
           ? state.extra! as PaymentLinkCardsSnapshot
           : null,
@@ -1804,7 +1820,12 @@ class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
     // navigation for a parked prefill (claim + present the card). Draining
     // here on unlock too would race and clobber that navigation. The wallet
     // listener still covers the loading -> loaded transition.
-    return AppToastHost(child: widget.child);
+    return AppToastHost(
+      child: GiftClaimFailureToastListener(
+        router: widget.router,
+        child: widget.child,
+      ),
+    );
   }
 
   String get _currentLocation =>
@@ -1875,7 +1896,24 @@ class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
     // owns intake while it is already visible, including its local wizard.
     if (location == '/' ||
         location == '/unlock' ||
-        location == '/payment-links') {
+        location == '/payment-links' ||
+        _isRouteOrChild(location, '/gift')) {
+      return;
+    }
+    if (kAppFormFactor == AppFormFactor.mobile &&
+        location == '/welcome' &&
+        !(ref.read(walletProvider).value?.hasWallet ??
+            ref.read(appBootstrapProvider).hasWallet)) {
+      _navigationScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _navigationScheduled = false;
+        if (!mounted ||
+            widget.router.state.matchedLocation != '/welcome' ||
+            ref.read(paymentLinkIntakeProvider).pendingLink == null) {
+          return;
+        }
+        widget.router.push('/gift');
+      });
       return;
     }
     final deferredMessage = paymentLinkEntryDeferredMessageAtLocation(

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../main.dart' show log;
+import '../../payment_links/services/gift_claim_setup_coordinator.dart';
 import '../../../core/account_name_policy.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_button.dart';
@@ -22,6 +23,7 @@ import '../shared/onboarding_flow_args.dart';
 import 'mobile_onboarding_progress.dart';
 import 'mobile_onboarding_progress_scope.dart';
 import 'mobile_onboarding_scaffold.dart';
+import '../../payment_links/providers/gift_claim_flow_provider.dart';
 
 typedef MobileCustomiseAccountFinishCallback =
     Future<void> Function(String accountName, String profilePictureId);
@@ -37,6 +39,8 @@ class MobileCustomiseAccountScreen extends ConsumerStatefulWidget {
     this.position,
     this.onBack,
     this.random,
+    this.actionsEnabled = true,
+    this.setupCommitted = false,
     super.key,
   }) : assert(
          args != null || (onFinish != null && position != null),
@@ -53,6 +57,12 @@ class MobileCustomiseAccountScreen extends ConsumerStatefulWidget {
 
   /// Optional entropy source for deterministic previews and tests.
   final Random? random;
+
+  /// A terminal setup failure can require reopening instead of creating again.
+  final bool actionsEnabled;
+
+  /// The account exists; retry only its unfinished storage, keeping its persona.
+  final bool setupCommitted;
 
   @override
   ConsumerState<MobileCustomiseAccountScreen> createState() =>
@@ -76,7 +86,8 @@ class _MobileCustomiseAccountScreenState
   int get _nameLength => accountNameCharacterLength(_nameController.text);
   bool get _nameValid => isAccountNameLengthValid(_nameController.text);
   bool get _isSubmitting => _submitPhase != _SubmitPhase.idle;
-  bool get _canContinue => !_isSubmitting && _nameValid;
+  bool get _canContinue =>
+      widget.actionsEnabled && !_isSubmitting && _nameValid;
 
   String? get _nameMessage {
     if (_submitError != null) return _submitError;
@@ -145,7 +156,9 @@ class _MobileCustomiseAccountScreenState
   }
 
   void _randomisePersona() {
-    if (_isSubmitting) return;
+    if (_isSubmitting || widget.setupCommitted || !widget.actionsEnabled) {
+      return;
+    }
     final suggestion = generateAccountPersona(random: widget.random);
     _nameController.value = TextEditingValue(
       text: suggestion.name,
@@ -158,7 +171,9 @@ class _MobileCustomiseAccountScreenState
   }
 
   Future<void> _pickProfilePicture() async {
-    if (_isSubmitting) return;
+    if (_isSubmitting || widget.setupCommitted || !widget.actionsEnabled) {
+      return;
+    }
     _nameFocusNode.unfocus();
     final selected = await showProfilePictureSheet(
       context,
@@ -218,8 +233,9 @@ class _MobileCustomiseAccountScreenState
     final pendingPassword = args.pendingPassword;
     if (pendingPassword == null) {
       await createAccount();
+      await completeGiftClaimImportSetup(ref);
       clearCustomisedAccountDraft(ref, args.flow);
-      router.go('/home');
+      router.go(giftClaimSetupCompletionLocation(ref, otherwise: '/home'));
       return;
     }
 
@@ -234,6 +250,7 @@ class _MobileCustomiseAccountScreenState
         await createAccount();
         securityNotifier.commitPasswordSetup();
         passwordCommitted = true;
+        await completeGiftClaimImportSetup(ref);
         clearCustomisedAccountDraft(ref, args.flow);
         router.go('/onboarding/biometrics');
       });
@@ -276,9 +293,10 @@ class _MobileCustomiseAccountScreenState
         onPressed: _canContinue ? _submit : null,
         trailing: const AppIcon(AppIcons.chevronForward),
         child: Text(switch (_submitPhase) {
-          _SubmitPhase.idle => 'Continue',
+          _SubmitPhase.idle => widget.setupCommitted ? 'Try again' : 'Continue',
           _SubmitPhase.stoppingSync => 'Stop syncing...',
-          _SubmitPhase.creatingWallet => 'Creating wallet...',
+          _SubmitPhase.creatingWallet =>
+            widget.setupCommitted ? 'Saving wallet...' : 'Creating wallet...',
         }),
       ),
       child: Column(
@@ -290,7 +308,10 @@ class _MobileCustomiseAccountScreenState
             nameFocusNode: _nameFocusNode,
             profilePictureId: _profilePictureId,
             message: _nameMessage,
-            enabled: !_isSubmitting,
+            enabled:
+                !_isSubmitting &&
+                !widget.setupCommitted &&
+                widget.actionsEnabled,
             onNameChanged: _handleNameChanged,
             onEditProfilePicture: _pickProfilePicture,
             onRandomisePersona: _randomisePersona,

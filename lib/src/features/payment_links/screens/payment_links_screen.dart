@@ -75,9 +75,14 @@ part 'payment_links_batch_creation.dart';
 /// [PaymentLinkOperations]. Artwork and message are carried by the v1
 /// presentation payload.
 class PaymentLinksScreen extends ConsumerStatefulWidget {
-  const PaymentLinksScreen({this.initialCards, super.key});
+  const PaymentLinksScreen({
+    this.initialCards,
+    this.initialReceivedCardAddress,
+    super.key,
+  });
 
   final PaymentLinkCardsSnapshot? initialCards;
+  final String? initialReceivedCardAddress;
 
   @override
   ConsumerState<PaymentLinksScreen> createState() => _PaymentLinksScreenState();
@@ -431,6 +436,15 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     } else {
       unawaited(_refreshFundingProgress(records: initialCards.created));
       unawaited(_refreshReceivedClaims(records: initialCards.received));
+    }
+    final address = widget.initialReceivedCardAddress;
+    if (address != null) {
+      final card = _receivedCards
+          .where((r) => r.address == address)
+          .firstOrNull;
+      setState(() => _activeCardsTab = PaymentLinkCardsTab.received);
+      if (card != null) _openReceivedCard(card);
+      return;
     }
     await _consumePendingPaymentLink();
   }
@@ -2719,7 +2733,8 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
               _ => '$usedCount of $count used',
             }
           : switch (_batchPendingKind(members)) {
-              PaymentLinkBatchPendingKind.incomplete => 'Some cards aren’t ready',
+              PaymentLinkBatchPendingKind.incomplete =>
+                'Some cards aren’t ready',
               PaymentLinkBatchPendingKind.unconfirmedBroadcast =>
                 'Payment status pending',
               PaymentLinkBatchPendingKind.confirming => 'Confirming payment',

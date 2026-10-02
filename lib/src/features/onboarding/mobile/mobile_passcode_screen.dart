@@ -14,6 +14,7 @@ import '../../../providers/app_security_provider.dart';
 import '../../../providers/router_refresh_provider.dart';
 import '../../../providers/wallet_mutation_guard.dart';
 import '../../address_book/providers/address_book_provider.dart';
+import '../../payment_links/services/gift_claim_setup_coordinator.dart';
 import '../../wallet_link/services/wallet_link_completion.dart';
 import '../keystone/keystone_onboarding_flow.dart'
     show keystoneOnboardingProvider;
@@ -37,9 +38,24 @@ enum _PasscodePhase { create, confirm, submitting }
 /// Import flows still use the desktop set-password sequence (prepare → account
 /// mutation under the sync pause → commit, with rollback on failure).
 class MobilePasscodeScreen extends ConsumerStatefulWidget {
-  const MobilePasscodeScreen({required this.args, super.key});
+  const MobilePasscodeScreen({
+    required SetPasswordScreenArgs this.args,
+    this.completeWalletLinkPackage = completeWalletLinkPackageBestEffort,
+    super.key,
+  }) : onConfirmed = null,
+       position = null;
 
-  final SetPasswordScreenArgs args;
+  const MobilePasscodeScreen.giftCard({
+    required Future<void> Function(String passcode) this.onConfirmed,
+    required OnboardingProgressPosition this.position,
+    super.key,
+  }) : args = null,
+       completeWalletLinkPackage = completeWalletLinkPackageBestEffort;
+
+  final SetPasswordScreenArgs? args;
+  final Future<void> Function(String passcode)? onConfirmed;
+  final OnboardingProgressPosition? position;
+  final WalletLinkCompletionCallback completeWalletLinkPackage;
 
   @override
   ConsumerState<MobilePasscodeScreen> createState() =>
@@ -97,7 +113,23 @@ class _MobilePasscodeScreenState extends ConsumerState<MobilePasscodeScreen> {
   /// Software, Keystone, and Ledger setup continue to account customisation without
   /// persisting the pending passcode. Wallet Link remains an immediate import.
   Future<void> _submit(String passcode) async {
-    final args = widget.args;
+    final onConfirmed = widget.onConfirmed;
+    if (onConfirmed != null) {
+      setState(() => _phase = _PasscodePhase.submitting);
+      try {
+        await onConfirmed(passcode);
+      } catch (error) {
+        if (mounted) _error = onboardingSubmitErrorMessage(error);
+      }
+      if (!mounted) return;
+      setState(() {
+        _phase = _PasscodePhase.create;
+        _entry = '';
+        _firstPasscode = null;
+      });
+      return;
+    }
+    final args = widget.args!;
     setState(() {
       _phase = _PasscodePhase.submitting;
       _error = null;
@@ -165,9 +197,11 @@ class _MobilePasscodeScreenState extends ConsumerState<MobilePasscodeScreen> {
                     network: args.requiredWalletLinkNetwork,
                     accountsToImport: args.walletLinkAccounts,
                   );
-              walletLinkImportedContactCount = await ref
-                  .read(addressBookProvider.notifier)
-                  .importContacts(args.walletLinkContacts);
+              walletLinkImportedContactCount = args.walletLinkContacts.isEmpty
+                  ? 0
+                  : await ref
+                        .read(addressBookProvider.notifier)
+                        .importContacts(args.walletLinkContacts);
           }
         });
 
@@ -181,7 +215,7 @@ class _MobilePasscodeScreenState extends ConsumerState<MobilePasscodeScreen> {
           if (accountImportResult == null) {
             throw StateError('Wallet link import result is missing.');
           }
-          await completeWalletLinkPackageBestEffort(
+          await widget.completeWalletLinkPackage(
             packageId: args.requiredWalletLinkPackageId,
             completionToken: args.requiredWalletLinkCompletionToken,
             keyBytes: args.requiredWalletLinkKeyBytes,
@@ -189,6 +223,7 @@ class _MobilePasscodeScreenState extends ConsumerState<MobilePasscodeScreen> {
             importedContactCount: walletLinkImportedContactCount,
           );
         }
+        await completeGiftClaimImportSetup(ref);
         router.go('/onboarding/biometrics');
       });
     } catch (e, st) {
@@ -235,12 +270,13 @@ class _MobilePasscodeScreenState extends ConsumerState<MobilePasscodeScreen> {
         child: Column(
           children: [
             MobileTopNav.steps(
-              progress: MobileOnboardingProgressScope.of(context)
-                  .at(
-                    onboardingFlowForSetup(widget.args.flow),
-                    OnboardingStage.passcode,
-                  )
-                  .value,
+              progress:
+                  (widget.position ??
+                          MobileOnboardingProgressScope.of(context).at(
+                            onboardingFlowForSetup(widget.args!.flow),
+                            OnboardingStage.passcode,
+                          ))
+                      .value,
               showBackButton: canNavigateBack,
               onBack: isSubmitting || !canNavigateBack
                   ? null
