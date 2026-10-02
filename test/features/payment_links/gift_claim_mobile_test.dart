@@ -69,6 +69,7 @@ void main() {
     bool testPrivacyLock = false,
     bool multipleRestoredAccounts = false,
     PaymentLinkReceivedStore? receivedStore,
+    GiftClaimImportStore? importStore,
   }) async {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -104,6 +105,8 @@ void main() {
           syncProvider.overrideWith(_IdleSync.new),
           paymentLinkOperationsProvider.overrideWithValue(operations),
           paymentLinkReceivedStoreProvider.overrideWithValue(store),
+          if (importStore != null)
+            giftClaimImportStoreProvider.overrideWithValue(importStore),
           paymentLinkClipboardProvider.overrideWithValue(
             paymentClipboard ?? FakePaymentLinkClipboard(text: clipboard),
           ),
@@ -541,6 +544,55 @@ void main() {
     }
     expect(location(tester), '/welcome');
     expect(await GiftClaimImportStore().load(), isNull);
+  });
+
+  testWidgets('repeated create-wallet taps open only one passcode page', (
+    tester,
+  ) async {
+    final store = _GatedGiftImportStore();
+    final container = await pumpWelcome(tester, importStore: store);
+    container
+        .read(paymentLinkIntakeProvider.notifier)
+        .receive(paymentLinkNavigationLink.toUri().toString());
+    await tester.pumpAndSettle();
+
+    final gate = store.loadGate = Completer<GiftClaimImportHandoff?>();
+    await tester.tap(keyed('gift_claim_create_a_wallet_to_claim'));
+    await tester.tap(keyed('gift_claim_create_a_wallet_to_claim'));
+
+    gate.complete(null);
+    await tester.pumpAndSettle();
+    expect(location(tester), '/gift/passcode');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(location(tester), '/gift');
+    expect(find.text('Gift found'), findsOneWidget);
+    expect(store.gatedLoads, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('create-wallet navigation can retry after a storage failure', (
+    tester,
+  ) async {
+    final store = _GatedGiftImportStore();
+    final container = await pumpWelcome(tester, importStore: store);
+    container
+        .read(paymentLinkIntakeProvider.notifier)
+        .receive(paymentLinkNavigationLink.toUri().toString());
+    await tester.pumpAndSettle();
+
+    final gate = store.loadGate = Completer<GiftClaimImportHandoff?>();
+    await tester.tap(keyed('gift_claim_create_a_wallet_to_claim'));
+    gate.completeError(StateError('Storage unavailable'));
+    await tester.pumpAndSettle();
+    expect(location(tester), '/gift');
+    expect(find.text('Couldn’t save the card. Try again.'), findsOneWidget);
+
+    store.loadGate = null;
+    await tester.tap(keyed('gift_claim_create_a_wallet_to_claim'));
+    await tester.pumpAndSettle();
+    expect(location(tester), '/gift/passcode');
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('a wallet made from the Card claims it and opens Home', (
@@ -1385,6 +1437,19 @@ void main() {
       await tester.pumpAndSettle();
       expect(location(tester), '/onboarding/method');
     });
+  }
+}
+
+class _GatedGiftImportStore extends GiftClaimImportStore {
+  Completer<GiftClaimImportHandoff?>? loadGate;
+  int gatedLoads = 0;
+
+  @override
+  Future<GiftClaimImportHandoff?> load() {
+    final gate = loadGate;
+    if (gate == null) return super.load();
+    gatedLoads++;
+    return gate.future;
   }
 }
 

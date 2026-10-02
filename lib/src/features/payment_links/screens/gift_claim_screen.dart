@@ -148,6 +148,7 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
 
   Future<void> _createGiftWallet() async {
     if (_handingOff) return;
+    _handingOff = true;
     try {
       await ref.read(giftClaimFlowProvider.notifier).cancelSetupReturn();
       if (mounted) context.push('/gift/passcode');
@@ -159,6 +160,8 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
           iconName: AppIcons.warning,
         );
       }
+    } finally {
+      _handingOff = false;
     }
   }
 
