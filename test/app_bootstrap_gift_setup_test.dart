@@ -169,6 +169,86 @@ void main() {
     expect(await storage.readPlain(_verifierSaltKey), 'password-salt');
   });
 
+  Future<void> seedImportHandoff() async {
+    await storage.delete(kPendingAccountMnemonicStorageKey);
+    await storage.delete(kGiftWalletSetupStartedStorageKey);
+    await storage.writePlain(kGiftClaimImportHandoffStorageKey, _journal);
+  }
+
+  for (final emptyDatabaseExists in [false, true]) {
+    test(
+      'import interrupted before account creation resets passcode with DB=$emptyDatabaseExists',
+      () async {
+        await seedImportHandoff();
+        if (emptyDatabaseExists) {
+          await database.writeAsString('empty wallet DB');
+        }
+
+        await expectCleared(await bootstrap());
+        // The unclaimed bearer still belongs to import recovery. Repeated
+        // launches remain eligible to set a passcode before storing a mnemonic.
+        expect(
+          await storage.readPlain(kGiftClaimImportHandoffStorageKey),
+          _journal,
+        );
+        await expectCleared(await bootstrap());
+      },
+    );
+  }
+
+  test('import handoff preserves credentials for a durable account', () async {
+    await seedImportHandoff();
+    await database.writeAsString('imported wallet DB');
+    rust.accounts = [
+      rust_wallet.AccountInfo(
+        uuid: 'imported-account',
+        name: 'Imported',
+        unifiedAddress: 'u1imported-account',
+        birthdayHeight: 3000000,
+        zip32AccountIndex: 0,
+        isHardware: false,
+        isSeedAnchor: true,
+      ),
+    ];
+    final result = await bootstrap();
+    expect(result.initialLocation, '/unlock');
+    expect(result.isPasswordConfigured, isTrue);
+    expect(await storage.readPlain(_verifierKey), 'password-verifier');
+    expect(
+      await storage.readPlain(kGiftClaimImportHandoffStorageKey),
+      _journal,
+    );
+  });
+
+  test(
+    'import DB inspection failure preserves credentials and blocks startup',
+    () async {
+      await seedImportHandoff();
+      await database.writeAsString('unreadable imported wallet DB');
+      rust.listError = StateError('database read failed');
+      expect((await bootstrap()).hasBlockingFailure, isTrue);
+      expect(await storage.readPlain(_verifierKey), 'password-verifier');
+      expect(
+        await storage.readPlain(kGiftClaimImportHandoffStorageKey),
+        _journal,
+      );
+    },
+  );
+
+  test(
+    'import handoff read failure preserves credentials and blocks startup',
+    () async {
+      await seedImportHandoff();
+      backend.failNextReadFor = kGiftClaimImportHandoffStorageKey;
+      expect((await bootstrap()).hasBlockingFailure, isTrue);
+      expect(await storage.readPlain(_verifierKey), 'password-verifier');
+      expect(
+        await storage.readPlain(kGiftClaimImportHandoffStorageKey),
+        _journal,
+      );
+    },
+  );
+
   for (final key in [
     _verifierSaltKey,
     _verifierKey,

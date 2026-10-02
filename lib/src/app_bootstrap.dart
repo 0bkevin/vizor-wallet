@@ -294,7 +294,14 @@ Future<AppBootstrapState> loadAppBootstrap({
         await storage.readPlain(kPendingAccountMnemonicStorageKey) != null;
     final hasStartedGiftSetup =
         await storage.readPlain(kGiftWalletSetupStartedStorageKey) != null;
-    final hasPendingGiftSetup = hasStartedGiftSetup || hasPendingGiftMnemonic;
+    // Import prepares the ordinary password rather than the Gift creation
+    // marker. Its handoff must also keep an interrupted walletless setup from
+    // skipping passcode setup after restart. Leave the bearer journal for import
+    // recovery; only credentials without a durable account are discarded.
+    final hasPendingGiftImport =
+        await storage.readPlain(kGiftClaimImportHandoffStorageKey) != null;
+    final hasPendingGiftSetup =
+        hasStartedGiftSetup || hasPendingGiftMnemonic || hasPendingGiftImport;
     final storedAccountsByUuid = {
       for (final account in storedAccounts) account.uuid: account,
     };

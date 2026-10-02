@@ -5,8 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/storage/app_secure_store.dart';
 import '../models/vizor_payment_link.dart';
 
-const _storageKey = 'zcash_gift_card_import_handoff_v1';
-
 final giftClaimImportStoreProvider = Provider((ref) => GiftClaimImportStore());
 
 class GiftClaimImportHandoff {
@@ -43,12 +41,16 @@ abstract interface class GiftClaimImportStorage {
 
 class _SecureImportStorage implements GiftClaimImportStorage {
   @override
-  Future<String?> read() => AppSecureStore.instance.readPlain(_storageKey);
+  Future<String?> read() =>
+      AppSecureStore.instance.readPlain(kGiftClaimImportHandoffStorageKey);
   @override
-  Future<void> write(String value) =>
-      AppSecureStore.instance.writePlain(_storageKey, value);
+  Future<void> write(String value) => AppSecureStore.instance.writePlain(
+    kGiftClaimImportHandoffStorageKey,
+    value,
+  );
   @override
-  Future<void> delete() => AppSecureStore.instance.delete(_storageKey);
+  Future<void> delete() =>
+      AppSecureStore.instance.delete(kGiftClaimImportHandoffStorageKey);
 }
 
 class GiftClaimImportStore {

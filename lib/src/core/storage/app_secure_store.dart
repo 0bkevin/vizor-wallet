@@ -32,6 +32,9 @@ const kRpcEndpointPresetKey = 'zcash_rpc_endpoint_preset';
 const kPaymentLinkRecoveryStorageKey = 'zcash_gift_card_recovery_v1';
 const kPaymentLinkReceivedStorageKey = 'zcash_gift_card_received_v1';
 
+/// OS-protected bearer journal carried through first-wallet import.
+const kGiftClaimImportHandoffStorageKey = 'zcash_gift_card_import_handoff_v1';
+
 /// Encrypted creation journal written before a Gift wallet account exists.
 const kPendingAccountMnemonicStorageKey = 'zcash_pending_account_mnemonic_v1';
 
