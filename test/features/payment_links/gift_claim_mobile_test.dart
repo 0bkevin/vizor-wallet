@@ -15,6 +15,8 @@ import 'package:zcash_wallet/src/app_bootstrap.dart';
 import 'package:zcash_wallet/src/core/config/rpc_endpoint_config.dart';
 import 'package:zcash_wallet/src/core/widgets/app_button.dart';
 import 'package:zcash_wallet/src/core/widgets/app_toast.dart';
+import 'package:zcash_wallet/src/features/payment_links/widgets/gift_claim_failure_toast_listener.dart';
+import 'package:zcash_wallet/src/providers/sync_keep_awake_provider.dart';
 import 'package:zcash_wallet/src/core/theme/app_theme.dart';
 import 'package:zcash_wallet/src/features/onboarding/mobile/mobile_passcode_screen.dart';
 import 'package:zcash_wallet/src/features/onboarding/mobile/mobile_customise_account_screen.dart';
@@ -64,6 +66,7 @@ void main() {
     BiometricUnlock? biometric,
     Size size = const Size(393, 852),
     bool restored = false,
+    bool testPrivacyLock = false,
     bool multipleRestoredAccounts = false,
     PaymentLinkReceivedStore? receivedStore,
   }) async {
@@ -76,6 +79,14 @@ void main() {
       ProviderScope(
         key: UniqueKey(),
         overrides: [
+          if (testPrivacyLock) ...[
+            syncKeepAwakeActiveProvider.overrideWithValue(true),
+            syncKeepAwakePrivacyLockModeProvider.overrideWith(
+              (ref) => ref.watch(syncKeepAwakePrivacyLockProvider).isLocked
+                  ? SyncKeepAwakePrivacyLockMode.done
+                  : SyncKeepAwakePrivacyLockMode.hidden,
+            ),
+          ],
           appBootstrapProvider.overrideWithValue(_noWalletBootstrap),
           accountProvider.overrideWith(
             restored
@@ -395,6 +406,99 @@ void main() {
       greaterThanOrEqualTo(topInset),
     );
   });
+
+  testWidgets(
+    'the active import Card does not warn about its own queued link',
+    (tester) async {
+      final container = await pumpWelcome(tester);
+      container
+          .read(paymentLinkIntakeProvider.notifier)
+          .receive(paymentLinkNavigationLink.toUri().toString());
+      await tester.pumpAndSettle();
+      await tester.tap(keyed('gift_claim_claim_with_an_existing_wallet'));
+      await tester.pumpAndSettle();
+      expect(location(tester), '/onboarding/method');
+      expect(
+        find.text('Finish account setup to open this gift card.'),
+        findsNothing,
+      );
+      // An unrelated link is still queued and explained during setup.
+      container
+          .read(paymentLinkIntakeProvider.notifier)
+          .receive(incomingLink.toUri().toString());
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Finish account setup to open this gift card.'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('the privacy lock hides the failure action until unlocked', (
+    tester,
+  ) async {
+    final container = await pumpWelcome(
+      tester,
+      restored: true,
+      testPrivacyLock: true,
+    );
+    final uuid = container.read(accountProvider).value!.activeAccountUuid!;
+    container
+        .read(giftClaimFailureNoticeProvider.notifier)
+        .report(paymentLinkNavigationLink, uuid);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('View card'), findsOneWidget);
+    container.read(syncKeepAwakePrivacyLockProvider.notifier).lock();
+    await tester.pumpAndSettle();
+    expect(container.read(syncKeepAwakePrivacyLockProvider).isLocked, isTrue);
+    expect(location(tester), '/home');
+    expect(find.text('View card'), findsNothing);
+    expect(container.read(giftClaimFailureNoticeProvider), isNotNull);
+    container.read(syncKeepAwakePrivacyLockProvider.notifier).unlock();
+    await tester.pumpAndSettle();
+    expect(find.text('View card'), findsOneWidget);
+    await tester.tap(find.text('View card'));
+    await tester.pumpAndSettle();
+    expect(location(tester), '/payment-links');
+    expect(container.read(giftClaimFailureNoticeProvider), isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'copy feedback temporarily covers the unacknowledged failure notice',
+    (tester) async {
+      final container = await pumpWelcome(tester, restored: true);
+      final uuid = container.read(accountProvider).value!.activeAccountUuid!;
+      container
+          .read(giftClaimFailureNoticeProvider.notifier)
+          .report(paymentLinkNavigationLink, uuid);
+      await tester.pump();
+      await tester.pump();
+      final listenerContext = tester.element(
+        find.byType(GiftClaimFailureToastListener),
+      );
+      showAppToast(listenerContext, 'Address copied');
+      await tester.pump();
+      expect(find.text('Address copied'), findsOneWidget);
+      expect(find.text('View card'), findsNothing);
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
+      expect(find.text('View card'), findsOneWidget);
+      expect(container.read(giftClaimFailureNoticeProvider), isNotNull);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AppToast),
+          matching: find.byType(IconButton),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(container.read(giftClaimFailureNoticeProvider), isNull);
+      expect(find.byType(AppToast), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('a pasted Card is checked and handed to an existing wallet', (
     tester,
@@ -855,7 +959,7 @@ void main() {
       expect(location(tester), '/home');
       expect(find.text('Couldn’t redeem your gift card.'), findsOneWidget);
       expect(find.text('View card'), findsOneWidget);
-      expect(container.read(giftClaimFailureNoticeProvider), isNull);
+      expect(container.read(giftClaimFailureNoticeProvider), isNotNull);
       final saved =
           (await container.read(paymentLinkReceivedStoreProvider).load())
               .single;
@@ -900,7 +1004,7 @@ void main() {
     gate.complete();
     await tester.pumpAndSettle();
     expect(find.text('Couldn’t redeem your gift card.'), findsOneWidget);
-    expect(container.read(giftClaimFailureNoticeProvider), isNull);
+    expect(container.read(giftClaimFailureNoticeProvider), isNotNull);
     await tester.pump(const Duration(seconds: 30));
     await tester.pump();
     expect(find.byType(AppToast), findsOneWidget);
@@ -911,7 +1015,15 @@ void main() {
     router.pop();
     await tester.pumpAndSettle();
     expect(location(tester), '/home');
-    expect(find.byType(AppToast), findsNothing);
+    expect(find.text('View card'), findsOneWidget);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AppToast),
+        matching: find.byType(IconButton),
+      ),
+    );
+    await tester.pump();
+    expect(container.read(giftClaimFailureNoticeProvider), isNull);
   });
 
   testWidgets('an incoming Card opens over Welcome', (tester) async {

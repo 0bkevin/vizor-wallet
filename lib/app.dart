@@ -1749,7 +1749,7 @@ const _kIncomingLinkNoticeDuration = Duration(seconds: 4);
 
 class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
   StreamSubscription<String>? _subscription;
-  ProviderSubscription<VizorPaymentLink?>? _intakeSubscription;
+  ProviderSubscription<List<VizorPaymentLink>>? _intakeSubscription;
 
   // --- gift card lane ---
   VizorPaymentLink? _lastDeferredLink;
@@ -1779,9 +1779,9 @@ class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
         ref.read(appBootstrapProvider).hasWallet;
     widget.router.routerDelegate.addListener(_handleRouteChanged);
     _intakeSubscription = ref.listenManual(
-      paymentLinkIntakeProvider.select((state) => state.pendingLink),
-      (_, link) {
-        if (link != null) _openPendingPaymentLink();
+      paymentLinkIntakeProvider.select((state) => state.pendingLinks),
+      (_, links) {
+        if (links.isNotEmpty) _openPendingPaymentLink();
       },
     );
     final service = ref.read(incomingUriServiceProvider);
@@ -1953,7 +1953,12 @@ class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
       paymentRequestCardPresented: _paymentRequestCardPresented,
     );
     if (deferredMessage != null) {
-      _showDeferredPaymentLinkMessage(pendingLink, deferredMessage);
+      final setupLink = ref.read(giftClaimSetupReturnProvider)?.link;
+      for (final queued in ref.read(paymentLinkIntakeProvider).pendingLinks) {
+        if (setupLink?.hasSameCanonicalPayload(queued) == true) continue;
+        _showDeferredPaymentLinkMessage(queued, deferredMessage);
+        break;
+      }
       return;
     }
     _lastDeferredLink = null;

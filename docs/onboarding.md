@@ -156,10 +156,12 @@ survives interruption during journal cleanup.
   automatically submit. A missing receiving account is not substituted.
 - Submitted claims use the existing Home Activity transaction identity. Waiting
   or failure without a txid does not create a synthetic transaction row.
-- A definitive setup-claim failure shows a dismissible Home toast with
-  **View card**, once the recipient's Home is visible. Face ID defers the notice;
-  dismissal, leaving Home, locking, or account switching closes it. There is no
-  Gift status banner, return page, or setup-failure screen.
+- A failed live setup-claim attempt shows a dismissible Home toast with
+  **View card**, once the recipient's Home is visible. Face ID defers the notice.
+  Leaving Home, either wallet/privacy lock, or account switching hides the notice
+  without acknowledging it; it returns on the recipient's unlocked Home until
+  dismissed or opened. Temporary copy feedback restores the persistent notice
+  afterward. There is no Gift status banner, return page, or setup-failure screen.
 - Received lists saved incoming cards, including pending/unsuccessful ones; it
   does not imply an on-chain receipt. Inspection/binding alone does not save a
   card, so setup must persist it before claim handoff.
@@ -186,6 +188,9 @@ A failed cleanup blocks a replacement credential until retry succeeds. Successfu
 hardware/Wallet Link setup clears its start marker without deleting a pending
 mnemonic journal. Forgot passcode explicitly warns that resetting an unbacked
 account makes its funds unrecoverable.
+
+Mobile root back dispatch includes Gift routes, and the themed system-bar region
+restores icon contrast after leaving Welcome in the same light/dark theme.
 
 ## Home, backup, and education
 

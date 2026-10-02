@@ -234,6 +234,24 @@ class AppToastHost extends StatefulWidget {
   State<AppToastHost> createState() => _AppToastHostState();
 }
 
+class _ToastNotification {
+  const _ToastNotification({
+    required this.message,
+    required this.duration,
+    required this.iconName,
+    required this.tone,
+    this.action,
+    this.onDismiss,
+  });
+
+  final String message;
+  final Duration? duration;
+  final String iconName;
+  final AppToastTone tone;
+  final AppToastAction? action;
+  final VoidCallback? onDismiss;
+}
+
 class _AppToastHostState extends State<AppToastHost> {
   static final List<_AppToastHostState> _activeStates = [];
   static OverlayEntry? _fallbackOverlayEntry;
@@ -245,13 +263,11 @@ class _AppToastHostState extends State<AppToastHost> {
     return null;
   }
 
-  String? _message;
-  String _iconName = AppIcons.checkCircle;
-  AppToastTone _tone = AppToastTone.neutral;
-  AppToastAction? _action;
-  bool _dismissible = false;
+  _ToastNotification? _notification;
+  // One persistent notice survives temporary copy/confirmation feedback.
+  // This is deliberately bounded; newer persistent notices replace older ones.
+  _ToastNotification? _pendingPersistent;
   Timer? _timer;
-  Object? _toastId;
 
   @override
   void initState() {
@@ -265,26 +281,48 @@ class _AppToastHostState extends State<AppToastHost> {
     String iconName = AppIcons.checkCircle,
     AppToastTone tone = AppToastTone.neutral,
     AppToastAction? action,
+    VoidCallback? onDismiss,
   }) {
-    _timer?.cancel();
-    final toastId = _toastId = Object();
-    setState(() {
-      _message = message;
-      _iconName = iconName;
-      _tone = tone;
-      _action = action;
-      _dismissible = duration == null;
-    });
-    _timer = duration == null ? null : Timer(duration, dismiss);
-    return () {
-      if (identical(_toastId, toastId)) dismiss();
-    };
+    final notification = _ToastNotification(
+      message: message,
+      duration: duration,
+      iconName: iconName,
+      tone: tone,
+      action: action,
+      onDismiss: onDismiss,
+    );
+    if (duration == null) {
+      _pendingPersistent = null;
+    } else if (_notification case final current?
+        when current.duration == null) {
+      _pendingPersistent = current;
+    }
+    _display(notification);
+    return () => _dismiss(notification);
   }
 
-  void dismiss() {
+  void _display(_ToastNotification? notification) {
     _timer?.cancel();
-    _toastId = null;
-    if (mounted) setState(() => _message = null);
+    if (!mounted) return;
+    setState(() => _notification = notification);
+    final duration = notification?.duration;
+    _timer = duration == null
+        ? null
+        : Timer(duration, () => _dismiss(notification!));
+  }
+
+  void _dismiss(_ToastNotification notification, {bool acknowledge = false}) {
+    if (identical(_notification, notification)) {
+      final pending = _pendingPersistent;
+      _pendingPersistent = null;
+      _display(pending);
+    } else if (identical(_pendingPersistent, notification)) {
+      _pendingPersistent = null;
+    } else {
+      return;
+    }
+    // Route/lock-driven hiding must preserve the caller's recovery notice.
+    if (acknowledge) notification.onDismiss?.call();
   }
 
   @override
@@ -296,7 +334,7 @@ class _AppToastHostState extends State<AppToastHost> {
 
   @override
   Widget build(BuildContext context) {
-    final message = _message;
+    final notification = _notification;
     // Hosts mounted outside a SafeArea (the mobile screens) must keep
     // the toast clear of the status bar / notch; inside a SafeArea the
     // ambient padding is already consumed and this resolves to the
@@ -311,31 +349,34 @@ class _AppToastHostState extends State<AppToastHost> {
         fit: StackFit.expand,
         children: [
           widget.child,
-          if (message != null)
+          if (notification != null)
             Positioned(
               top: topInset,
               left: 0,
               right: 0,
               child: IgnorePointer(
-                ignoring: _action == null && !_dismissible,
+                ignoring:
+                    notification.action == null &&
+                    notification.duration != null,
                 child: Center(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: AppSpacing.sm,
                     ),
                     child: AppToast(
-                      message: message,
-                      iconName: _iconName,
-                      tone: _tone,
-                      onDismiss: _dismissible ? dismiss : null,
-                      action: _action == null
+                      message: notification.message,
+                      iconName: notification.iconName,
+                      tone: notification.tone,
+                      onDismiss: notification.duration == null
+                          ? () => _dismiss(notification, acknowledge: true)
+                          : null,
+                      action: notification.action == null
                           ? null
                           : AppToastAction(
-                              label: _action!.label,
+                              label: notification.action!.label,
                               onPressed: () {
-                                final action = _action!;
-                                dismiss();
-                                action.onPressed();
+                                _dismiss(notification);
+                                notification.action!.onPressed();
                               },
                             ),
                     ),
@@ -351,6 +392,7 @@ class _AppToastHostState extends State<AppToastHost> {
 
 /// Returns a dismissal callback scoped to this notification. Callers that keep
 /// an actionable toast visible can dismiss it when its screen becomes hidden.
+/// [onDismiss] runs only when the user closes the notice.
 VoidCallback? showAppToast(
   BuildContext context,
   String message, {
@@ -358,6 +400,7 @@ VoidCallback? showAppToast(
   String iconName = AppIcons.checkCircle,
   AppToastTone tone = AppToastTone.neutral,
   AppToastAction? action,
+  VoidCallback? onDismiss,
 }) {
   // 1. A direct host scope (the toast renders inside the nearest
   //    AppToastHost, which is under the app's AppTheme).
@@ -371,6 +414,7 @@ VoidCallback? showAppToast(
       iconName: iconName,
       tone: tone,
       action: action,
+      onDismiss: onDismiss,
     );
   }
 
@@ -386,6 +430,7 @@ VoidCallback? showAppToast(
       iconName: iconName,
       tone: tone,
       action: action,
+      onDismiss: onDismiss,
     );
   }
 
@@ -408,6 +453,7 @@ VoidCallback? showAppToast(
       tone: tone,
       theme: theme,
       action: action,
+      onDismiss: onDismiss,
     );
   }
 
@@ -420,6 +466,7 @@ VoidCallback? showAppToast(
       iconName: iconName,
       tone: tone,
       action: action,
+      onDismiss: onDismiss,
     );
   }
   assert(
@@ -447,6 +494,7 @@ VoidCallback _showOverlayToast(
   required AppToastTone tone,
   required AppThemeData? theme,
   AppToastAction? action,
+  VoidCallback? onDismiss,
 }) {
   final previousEntry = _AppToastHostState._fallbackOverlayEntry;
   if (previousEntry?.mounted ?? false) {
@@ -471,6 +519,10 @@ VoidCallback _showOverlayToast(
       theme: theme,
       action: action,
       onDismiss: dismiss,
+      onUserDismiss: () {
+        dismiss();
+        onDismiss?.call();
+      },
       onDisposed: () {
         if (_AppToastHostState._fallbackOverlayEntry == entry) {
           _AppToastHostState._fallbackOverlayEntry = null;
@@ -493,6 +545,7 @@ class _OverlayAppToast extends StatefulWidget {
     required this.theme,
     required this.onDismiss,
     required this.onDisposed,
+    required this.onUserDismiss,
     this.action,
   });
 
@@ -504,6 +557,7 @@ class _OverlayAppToast extends StatefulWidget {
   final AppToastAction? action;
   final VoidCallback onDismiss;
   final VoidCallback onDisposed;
+  final VoidCallback onUserDismiss;
 
   @override
   State<_OverlayAppToast> createState() => _OverlayAppToastState();
@@ -548,7 +602,7 @@ class _OverlayAppToastState extends State<_OverlayAppToast> {
       message: widget.message,
       iconName: widget.iconName,
       tone: widget.tone,
-      onDismiss: widget.duration == null ? widget.onDismiss : null,
+      onDismiss: widget.duration == null ? widget.onUserDismiss : null,
       action: widget.action == null
           ? null
           : AppToastAction(
