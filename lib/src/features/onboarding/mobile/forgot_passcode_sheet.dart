@@ -15,6 +15,9 @@ import '../../../providers/sync_provider.dart';
 import '../../../providers/wallet_mutation_guard.dart';
 
 const kForgotPasscodeLastWarningArmDelay = Duration(seconds: 3);
+const kForgotPasscodeUnbackedAccountWarning =
+    'If you haven’t backed up an account’s secret passphrase, '
+    'you can’t recover its funds after resetting Vizor.';
 const _kForgotPasscodeCountdownTick = Duration(seconds: 1);
 const double _kForgotPasscodeButtonMinWidth = 196;
 
@@ -51,6 +54,14 @@ class ForgotPasscodeSheet extends ConsumerWidget {
             'import accounts again. Unshared gift card links will be '
             'permanently lost.',
             style: AppTypography.bodyMedium.copyWith(color: colors.text.accent),
+          ),
+          const SizedBox(height: AppSpacing.s),
+          Text(
+            kForgotPasscodeUnbackedAccountWarning,
+            key: const ValueKey('mobile_forgot_passcode_backup_warning'),
+            style: AppTypography.bodyMediumStrong.copyWith(
+              color: colors.text.destructive,
+            ),
           ),
           if (claimsInFlight > 0) ...[
             const SizedBox(height: AppSpacing.s),

@@ -29,6 +29,7 @@ import '../features/migration/services/ironwood_migration_background_credential_
 import '../features/migration/services/ironwood_migration_operation_registry.dart';
 import '../features/payment_links/providers/payment_link_claim_lifecycle_registry_provider.dart';
 import '../features/payment_links/services/payment_link_received_store.dart';
+import '../features/payment_links/models/vizor_payment_link.dart';
 import '../features/payment_links/services/payment_link_recovery_store.dart';
 import '../features/voting/voting_flow_models.dart';
 import '../rust/api/sync.dart' as rust_sync;
@@ -73,6 +74,41 @@ class WalletCreationCurrentBlockHeightException implements Exception {
 
   @override
   String toString() => kWalletCreationCurrentBlockHeightErrorMessage;
+}
+
+/// Account setup may have created a DB account before storage failed. Keep
+/// its password and recovery journal so unlock can finish the original setup.
+class WalletAccountSetupInterruptedException implements Exception {
+  const WalletAccountSetupInterruptedException(this.accountUuid, this.cause);
+
+  final String? accountUuid;
+  final Object cause;
+
+  @override
+  String toString() =>
+      'Couldn’t finish saving your wallet. Close and reopen Vizor to finish setup.';
+}
+
+class GiftClaimAccountCreatedException
+    extends WalletAccountSetupInterruptedException {
+  const GiftClaimAccountCreatedException(super.accountUuid, super.cause);
+
+  @override
+  String toString() => cause.toString();
+}
+
+const kWalletAccountStateUncertainMessage =
+    "Vizor couldn't verify the existing wallet. Close and reopen Vizor before trying again.";
+
+/// A first-account operation was refused because the wallet DB may already
+/// contain an account that is not represented in Dart state.
+class WalletAccountStateUncertainException implements Exception {
+  const WalletAccountStateUncertainException(this.cause);
+
+  final Object cause;
+
+  @override
+  String toString() => kWalletAccountStateUncertainMessage;
 }
 
 /// Kept to one rendered line: the desktop lost-password card is a fixed 520px
@@ -171,6 +207,20 @@ class LinkedWalletAccountsImportResult {
   final int skippedDuplicateCount;
 }
 
+/// A durable account recovery completed, even when its UUID was already known.
+/// Claim recovery listens without creating a dependency back into this notifier.
+final accountSetupRecoveryGenerationProvider =
+    NotifierProvider<AccountSetupRecoveryGeneration, int>(
+      AccountSetupRecoveryGeneration.new,
+    );
+
+class AccountSetupRecoveryGeneration extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void completed() => state++;
+}
+
 class AccountNotifier extends AsyncNotifier<AccountState> {
   AccountNotifier() : _storage = AppSecureStore.instance;
 
@@ -211,7 +261,7 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
 
       if (accounts.isEmpty) {
         // First account — create wallet (init DB + create account)
-        await _deleteExistingDb(dbPath);
+        await _replaceDbForFirstWallet(dbPath, network);
         final result = await rust_wallet.createWallet(
           network: network,
           dbPath: dbPath,
@@ -291,6 +341,8 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
     String? name,
     String profilePictureId = kDefaultProfilePictureId,
   }) async {
+    String? firstWalletDbPath;
+    String? firstWalletNetwork;
     try {
       final dbPath = await _getDbPath();
       final endpoint = ref.read(rpcEndpointProvider);
@@ -319,6 +371,15 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
       late final String unifiedAddress;
 
       if (accounts.isEmpty) {
+        await _assertFirstWalletDbIsEmpty(dbPath, network);
+        await _recordPendingSoftwareSetup(
+          mnemonic: mnemonic,
+          network: network,
+          name: accountName,
+          profilePictureId: normalizedProfilePictureId,
+        );
+        firstWalletDbPath = dbPath;
+        firstWalletNetwork = network;
         await _deleteExistingDb(dbPath);
         final result = await rust_wallet.importWallet(
           mnemonic: mnemonic,
@@ -365,11 +426,332 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
         ),
       );
 
+      if (accounts.isEmpty) await _clearPendingSoftwareSetup();
+
       log('createAccountFromMnemonic: success, uuid=$accountUuid');
     } catch (e, st) {
+      if (firstWalletDbPath != null) {
+        await _preservePartialSoftwareSetup(
+          firstWalletDbPath,
+          firstWalletNetwork!,
+          e,
+          st,
+        );
+      }
       log('createAccountFromMnemonic: ERROR: $e\n$st');
       rethrow;
     }
+  }
+
+  /// Creates the first account while claiming a Gift Card, in an order where
+  /// no interruption leaves an account without its secret passphrase: the
+  /// passphrase goes to a pending key, then the account is created, then the
+  /// passphrase and account metadata are saved. The account stays
+  /// [AccountInfo.setupPending] until it is backed up.
+  ///
+  /// Any failure once the account may exist throws
+  /// [GiftClaimAccountCreatedException].
+  Future<String> createGiftClaimAccount({
+    required String name,
+    required String profilePictureId,
+    required VizorPaymentLink link,
+  }) => ref
+      .read(linuxKeyringCoordinatorProvider)
+      .runMutation(
+        () => _createGiftClaimAccount(
+          name: name,
+          profilePictureId: profilePictureId,
+          link: link,
+        ),
+      );
+
+  Future<String> _createGiftClaimAccount({
+    required String name,
+    required String profilePictureId,
+    required VizorPaymentLink link,
+  }) async {
+    validateAccountName(name);
+    final accountName = normalizeAccountName(name);
+    final giftProfilePictureId = normalizeProfilePictureId(profilePictureId);
+    final current = state.value;
+    if (current == null || current.accounts.isNotEmpty) {
+      throw StateError('A Gift Card wallet can only be the first account.');
+    }
+    final dbPath = await _getDbPath();
+    final network = ref.read(rpcEndpointProvider).networkName;
+    if (link.network != network) {
+      throw StateError('Gift Card network does not match the wallet.');
+    }
+    await _assertFirstWalletDbIsEmpty(dbPath, network);
+    final birthday = await _fetchCreationBirthdayHeight();
+    // Bootstrap must know the DB network even if creation or later saves stop.
+    await _storage.writeString(_networkKey, network);
+    final mnemonic = rust_wallet.generateMnemonic();
+    await _storage.writeSecretString(
+      kPendingAccountMnemonicStorageKey,
+      jsonEncode({
+        'mnemonic': mnemonic,
+        'network': network,
+        'name': accountName,
+        'profilePictureId': giftProfilePictureId,
+        'giftLink': link.toRecoveryUri().toString(),
+        'giftAddress': link.address,
+        'giftCreatedAt': link.createdAt.toIso8601String(),
+        'giftIsCreatedAtProvisional': link.isCreatedAtProvisional,
+      }),
+    );
+
+    final rust_wallet.WalletImportResult created;
+    try {
+      await _deleteExistingDb(dbPath);
+      created = await rust_wallet.importWallet(
+        mnemonic: mnemonic,
+        bip39Passphrase: '',
+        birthdayHeight: birthday,
+        network: network,
+        dbPath: dbPath,
+        accountName: accountName,
+      );
+    } catch (error, stackTrace) {
+      // Roll back only when the DB provably holds no account.
+      final listed = await _listAccountsAfterFailedCreate(dbPath, network);
+      if (listed != null && listed.isEmpty) rethrow;
+      rust_wallet.AccountInfo? matchingAccount;
+      if (listed != null) {
+        try {
+          final matchingUuid = await rust_wallet.findSoftwareAccountForMnemonic(
+            mnemonic: mnemonic,
+            network: network,
+            dbPath: dbPath,
+            zip32AccountIndex: 0,
+          );
+          matchingAccount = listed
+              .where((account) => account.uuid == matchingUuid)
+              .firstOrNull;
+        } catch (lookupError) {
+          log(
+            'createGiftClaimAccount: created account lookup failed: $lookupError',
+          );
+        }
+      }
+      final uuid = matchingAccount?.uuid;
+      if (matchingAccount != null) {
+        _publishCreatedGiftAccount(
+          matchingAccount.uuid,
+          matchingAccount.unifiedAddress,
+          accountName,
+          giftProfilePictureId,
+        );
+      }
+      log('createGiftClaimAccount: account state unknown after: $error');
+      Error.throwWithStackTrace(
+        GiftClaimAccountCreatedException(uuid, error),
+        stackTrace,
+      );
+    }
+
+    final uuid = created.accountUuid;
+    try {
+      await _storage.writeAccountMnemonic(uuid, mnemonic);
+      await _saveAccounts([
+        _giftAccount(uuid, accountName, giftProfilePictureId),
+      ]);
+      await _storage.writeString(_activeAccountKey, uuid);
+      await ref
+          .read(paymentLinkReceivedStoreProvider)
+          .saveReady(link, setupAccountUuid: uuid);
+    } catch (error, stackTrace) {
+      // Publish the account so a retry cannot recreate the DB; the pending
+      // passphrase is attached on the next unlock.
+      _publishCreatedGiftAccount(
+        uuid,
+        created.unifiedAddress,
+        accountName,
+        giftProfilePictureId,
+      );
+      log('createGiftClaimAccount: saving the new account failed: $error');
+      Error.throwWithStackTrace(
+        GiftClaimAccountCreatedException(uuid, error),
+        stackTrace,
+      );
+    }
+    _publishCreatedGiftAccount(
+      uuid,
+      created.unifiedAddress,
+      accountName,
+      giftProfilePictureId,
+    );
+    log('createGiftClaimAccount: success, uuid=$uuid');
+    return uuid;
+  }
+
+  /// Called only after the card and its receiving account are durable.
+  Future<void> clearPendingGiftAccountSetup({
+    required String accountUuid,
+  }) async {
+    final pending = await _storage.readSecretStringWithOptions(
+      kPendingAccountMnemonicStorageKey,
+      requireUnlockedSession: true,
+    );
+    if (pending != null) {
+      final draft = jsonDecode(pending) as Map<String, dynamic>;
+      final card = await ref
+          .read(paymentLinkReceivedStoreProvider)
+          .find(draft['giftAddress'] as String);
+      if (card?.setupAccountUuid != accountUuid) {
+        throw StateError('Gift Card receiving account was not saved.');
+      }
+      await _storage.delete(kPendingAccountMnemonicStorageKey);
+    }
+    await _storage.delete(kGiftWalletSetupStartedStorageKey);
+  }
+
+  AccountInfo _giftAccount(String uuid, String name, String profilePictureId) =>
+      AccountInfo(
+        uuid: uuid,
+        name: name,
+        profilePictureId: profilePictureId,
+        order: 0,
+        isSeedAnchor: true,
+        setupPending: true,
+        giftEducationPending: true,
+      );
+
+  void _publishCreatedGiftAccount(
+    String uuid,
+    String address,
+    String name,
+    String profilePictureId,
+  ) {
+    state = AsyncData(
+      AccountState(
+        accounts: [_giftAccount(uuid, name, profilePictureId)],
+        activeAccountUuid: uuid,
+        activeAddress: address,
+      ),
+    );
+  }
+
+  /// Null when the DB cannot be read, which is not proof it is empty.
+  Future<List<rust_wallet.AccountInfo>?> _listAccountsAfterFailedCreate(
+    String dbPath,
+    String network,
+  ) async {
+    try {
+      if (!rust_wallet.walletExists(dbPath: dbPath)) return const [];
+      return await rust_wallet.listAccounts(dbPath: dbPath, network: network);
+    } catch (error) {
+      log('createGiftClaimAccount: account listing failed: $error');
+      return null;
+    }
+  }
+
+  /// Attaches a pending secret passphrase to the account it derives, after a
+  /// Gift Card setup stopped between creating the account and saving it.
+  /// A passphrase no account derives from cannot hold funds and is dropped.
+  Future<void> recoverPendingAccountMnemonic() => ref
+      .read(linuxKeyringCoordinatorProvider)
+      .runMutation(_recoverPendingAccountMnemonic);
+
+  Future<void> _recoverPendingAccountMnemonic() async {
+    final sessionGeneration = _storage.sessionGeneration;
+    void requireCurrentSession() {
+      if (!_storage.isSessionGenerationCurrent(sessionGeneration) ||
+          !_storage.hasSessionPassword) {
+        throw const SecureStorageSessionChangedException();
+      }
+    }
+
+    final pending = await _storage.readSecretStringWithOptions(
+      kPendingAccountMnemonicStorageKey,
+      requireUnlockedSession: true,
+    );
+    if (pending == null || pending.isEmpty) return;
+    final draft = jsonDecode(pending) as Map<String, dynamic>;
+    if (draft['kind'] == 'software') {
+      await _recoverPendingSoftwareSetup(draft, requireCurrentSession);
+      return;
+    }
+    final mnemonic = draft['mnemonic'] as String;
+    final savedMetadata = await _storage.readString(_accountsKey);
+    final metadataUuids = savedMetadata == null
+        ? <String>{}
+        : {
+            for (final account in jsonDecode(savedMetadata) as List)
+              account['uuid'] as String,
+          };
+    final dbPath = await _getDbPath();
+    final network = draft['network'] as String;
+    final uuid = await rust_wallet.findSoftwareAccountForMnemonic(
+      mnemonic: mnemonic,
+      network: network,
+      dbPath: dbPath,
+      zip32AccountIndex: 0,
+    );
+    if (uuid != null) {
+      await _restoreAccountSecretIfMissing(
+        uuid: uuid,
+        secret: SoftwareWalletSecret(mnemonic: mnemonic),
+        dbPath: dbPath,
+        network: network,
+        zip32AccountIndex: 0,
+        requireCurrentSession: requireCurrentSession,
+      );
+      final current = state.value ?? const AccountState();
+      if (!current.accounts.any((account) => account.uuid == uuid)) {
+        log(
+          'recoverPendingAccountMnemonic: derived account $uuid is missing '
+          'from account state; preserving pending passphrase',
+        );
+        return;
+      }
+      final accounts = [
+        for (final account in current.accounts)
+          account.uuid == uuid
+              ? account.copyWith(
+                  name: metadataUuids.contains(uuid)
+                      ? null
+                      : draft['name'] as String,
+                  profilePictureId: metadataUuids.contains(uuid)
+                      ? null
+                      : draft['profilePictureId'] as String,
+                  setupPending: metadataUuids.contains(uuid) ? null : true,
+                  giftEducationPending: metadataUuids.contains(uuid)
+                      ? null
+                      : true,
+                )
+              : account,
+      ];
+      // Persist the backup-required marker before deleting the recovery key.
+      // This is also required when the account mnemonic was already attached:
+      // account JSON may have failed to save immediately before a restart.
+      requireCurrentSession();
+      await _saveAccounts(accounts);
+      requireCurrentSession();
+      state = AsyncData(current.copyWith(accounts: accounts));
+      final link = VizorPaymentLink.parse(draft['giftLink'] as String)
+          .withResolvedMetadata(
+            address: draft['giftAddress'] as String,
+            createdAt: DateTime.parse(draft['giftCreatedAt'] as String),
+            isCreatedAtProvisional: draft['giftIsCreatedAtProvisional'] as bool,
+          );
+      final cards = ref.read(paymentLinkReceivedStoreProvider);
+      final card = await cards.find(link.address);
+      if ((card?.setupAccountUuid != null && card!.setupAccountUuid != uuid) ||
+          (card?.destinationAccountUuid != null &&
+              card!.destinationAccountUuid != uuid)) {
+        throw StateError('Gift Card belongs to a different receiving account.');
+      }
+      requireCurrentSession();
+      if (card?.setupAccountUuid == null) {
+        await cards.saveReady(link, setupAccountUuid: uuid);
+      }
+      log('recoverPendingAccountMnemonic: recovered $uuid');
+    }
+    requireCurrentSession();
+    await _storage.delete(kPendingAccountMnemonicStorageKey);
+    await _storage.delete(kGiftWalletSetupStartedStorageKey);
+    ref.read(accountSetupRecoveryGenerationProvider.notifier).completed();
   }
 
   /// Import a wallet from mnemonic.
@@ -401,6 +783,8 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
     String profilePictureId = kDefaultProfilePictureId,
     List<int> additionalAccountIndices = const [],
   }) async {
+    String? firstWalletDbPath;
+    String? firstWalletNetwork;
     try {
       final dbPath = await _getDbPath();
       final endpoint = ref.read(rpcEndpointProvider);
@@ -427,6 +811,16 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
       final previousActiveAddress = state.value?.activeAddress;
 
       if (isFirstWalletAccount) {
+        await _assertFirstWalletDbIsEmpty(dbPath, network);
+        await _recordPendingSoftwareSetup(
+          mnemonic: mnemonic,
+          bip39Passphrase: bip39Passphrase,
+          network: network,
+          name: accountName,
+          profilePictureId: normalizedProfilePictureId,
+        );
+        firstWalletDbPath = dbPath;
+        firstWalletNetwork = network;
         await _deleteExistingDb(dbPath);
       }
 
@@ -465,6 +859,7 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
             name: result.accounts[i].name,
             order: accounts.length + i,
             isSeedAnchor: result.accounts[i].isSeedAnchor,
+            zip32AccountIndex: result.accounts[i].zip32AccountIndex,
             profilePictureId: i == 0
                 ? normalizedProfilePictureId
                 : kDefaultProfilePictureId,
@@ -492,14 +887,173 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
         ),
       );
 
+      if (isFirstWalletAccount) await _clearPendingSoftwareSetup();
+
       log(
         'importAccount: success, active=$activeAccountUuid, '
         'accounts=${result.accounts.map((a) => a.zip32AccountIndex).join(',')}',
       );
     } catch (e, st) {
+      if (firstWalletDbPath != null) {
+        await _preservePartialSoftwareSetup(
+          firstWalletDbPath,
+          firstWalletNetwork!,
+          e,
+          st,
+        );
+      }
       log('importAccount: ERROR: $e\n$st');
       rethrow;
     }
+  }
+
+  Future<void> _recordPendingSoftwareSetup({
+    required String mnemonic,
+    String bip39Passphrase = '',
+    required String network,
+    required String name,
+    required String profilePictureId,
+  }) async {
+    await _storage.writeString(_networkKey, network);
+    await _storage.writeSecretString(
+      kPendingAccountMnemonicStorageKey,
+      jsonEncode({
+        'kind': 'software',
+        'mnemonic': SoftwareWalletSecret(
+          mnemonic: mnemonic,
+          bip39Passphrase: bip39Passphrase,
+        ).encodeForStorage(),
+        'network': network,
+        'name': name,
+        'profilePictureId': profilePictureId,
+      }),
+    );
+  }
+
+  Future<void> _preservePartialSoftwareSetup(
+    String dbPath,
+    String network,
+    Object error,
+    StackTrace stack,
+  ) async {
+    final listed = await _listAccountsAfterFailedCreate(dbPath, network);
+    if (listed == null || listed.isNotEmpty) {
+      // A possibly created account keeps its credential and recovery material.
+      // Bootstrap lists it, and unlock finishes its original storage writes.
+      Error.throwWithStackTrace(
+        WalletAccountSetupInterruptedException(null, error),
+        stack,
+      );
+    }
+  }
+
+  Future<void> _clearPendingSoftwareSetup() async {
+    try {
+      await _storage.delete(kPendingAccountMnemonicStorageKey);
+      await _storage.delete(kGiftWalletSetupStartedStorageKey);
+    } catch (error) {
+      // The secrets and metadata are durable; unlock can retry this cleanup.
+      log('Account setup journal cleanup failed: ${error.runtimeType}');
+    }
+  }
+
+  Future<void> _restoreAccountSecretIfMissing({
+    required String uuid,
+    required SoftwareWalletSecret secret,
+    required String dbPath,
+    required String network,
+    required int zip32AccountIndex,
+    required void Function() requireCurrentSession,
+  }) async {
+    final stored = await _storage.readAccountMnemonicBytes(
+      uuid,
+      requireUnlockedSession: true,
+    );
+    final attached = stored != null && stored.isNotEmpty;
+    try {
+      if (attached) {
+        final attachedUuid = await rust_wallet.findSoftwareAccountForMnemonic(
+          mnemonic: utf8.decode(stored),
+          network: network,
+          dbPath: dbPath,
+          zip32AccountIndex: zip32AccountIndex,
+        );
+        if (attachedUuid != uuid) {
+          throw StateError('Stored passphrase does not match the account.');
+        }
+      }
+    } finally {
+      stored?.fillRange(0, stored.length, 0);
+    }
+    requireCurrentSession();
+    if (!attached) {
+      await _storage.writeAccountMnemonic(
+        uuid,
+        secret.mnemonic,
+        bip39Passphrase: secret.bip39Passphrase,
+      );
+    }
+  }
+
+  Future<void> _recoverPendingSoftwareSetup(
+    Map<String, dynamic> draft,
+    void Function() requireCurrentSession,
+  ) async {
+    final current = state.value;
+    if (current == null || !current.hasAccounts) return;
+    final secret = SoftwareWalletSecret.decode(draft['mnemonic'] as String);
+    final dbPath = await _getDbPath();
+    final network = draft['network'] as String;
+    final saved = await _storage.readString(_accountsKey);
+    final savedUuids = {
+      for (final item in saved == null ? const [] : jsonDecode(saved) as List)
+        item['uuid'] as String,
+    };
+    final accounts = <AccountInfo>[];
+    var recovered = false;
+    for (final account in current.accounts) {
+      final index = account.zip32AccountIndex ?? 0;
+      final uuid = account.isHardware
+          ? null
+          : await rust_wallet.findSoftwareAccountForMnemonic(
+              mnemonic: secret.encodeForStorage(),
+              network: network,
+              dbPath: dbPath,
+              zip32AccountIndex: index,
+            );
+      if (uuid != account.uuid) {
+        accounts.add(account);
+        continue;
+      }
+      await _restoreAccountSecretIfMissing(
+        uuid: uuid!,
+        secret: secret,
+        dbPath: dbPath,
+        network: network,
+        zip32AccountIndex: index,
+        requireCurrentSession: requireCurrentSession,
+      );
+      accounts.add(
+        index == 0 && !savedUuids.contains(uuid)
+            ? account.copyWith(
+                name: draft['name'] as String,
+                profilePictureId: draft['profilePictureId'] as String,
+              )
+            : account,
+      );
+      recovered = true;
+    }
+    if (!recovered) return;
+    requireCurrentSession();
+    await _saveAccounts(accounts);
+    if (current.activeAccountUuid case final uuid?) {
+      await _storage.writeString(_activeAccountKey, uuid);
+    }
+    requireCurrentSession();
+    state = AsyncData(current.copyWith(accounts: accounts));
+    await _storage.delete(kPendingAccountMnemonicStorageKey);
+    await _storage.delete(kGiftWalletSetupStartedStorageKey);
+    ref.read(accountSetupRecoveryGenerationProvider.notifier).completed();
   }
 
   Future<rust_wallet.SoftwareWalletImportDiscoveryResult>
@@ -649,6 +1203,79 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
       current.copyWith(accounts: current.accounts.map(rename).toList()),
     );
     log('renameAccount: $uuid → $normalizedName');
+  }
+
+  /// Records an explicit confirmation that this account's phrase was saved.
+  Future<void> markBackedUp(String uuid) => ref
+      .read(linuxKeyringCoordinatorProvider)
+      .runMutation(
+        () => _updateAccountSetupMetadata(
+          uuid,
+          (account) => account.copyWith(
+            setupPending: false,
+            clearBackupReminderSnooze: true,
+          ),
+        ),
+      );
+
+  /// Hides the Home reminder temporarily without marking the backup complete.
+  Future<void> snoozeBackupReminder(String uuid, {DateTime? now}) => ref
+      .read(linuxKeyringCoordinatorProvider)
+      .runMutation(
+        () => _updateAccountSetupMetadata(uuid, (account) {
+          if (!account.setupPending) {
+            throw StateError('Account backup is already complete: $uuid');
+          }
+          final count = (account.backupReminderSnoozeCount + 1).clamp(1, 3);
+          return account.copyWith(
+            backupReminderSnoozeCount: count,
+            backupReminderSnoozedUntilUtc: (now ?? DateTime.now()).toUtc().add(
+              backupReminderDelayForCount(count),
+            ),
+          );
+        }),
+      );
+
+  /// Completes only the deferred Zcash introduction, independently of backup.
+  Future<void> markGiftEducationComplete(String uuid) => ref
+      .read(linuxKeyringCoordinatorProvider)
+      .runMutation(
+        () => _updateAccountSetupMetadata(
+          uuid,
+          (account) => account.copyWith(giftEducationPending: false),
+        ),
+      );
+
+  Future<void> _updateAccountSetupMetadata(
+    String uuid,
+    AccountInfo Function(AccountInfo) update,
+  ) async {
+    final previous = state.value ?? const AccountState();
+    final target = previous.accounts
+        .where((account) => account.uuid == uuid)
+        .firstOrNull;
+    if (target == null) throw StateError('Account not found: $uuid');
+    final updated = update(target);
+    AccountInfo merge(AccountInfo account) => account.uuid == uuid
+        ? account.copyWith(
+            setupPending: updated.setupPending,
+            giftEducationPending: updated.giftEducationPending,
+            backupReminderSnoozedUntilUtc:
+                updated.backupReminderSnoozedUntilUtc,
+            backupReminderSnoozeCount: updated.backupReminderSnoozeCount,
+            clearBackupReminderSnooze:
+                updated.backupReminderSnoozedUntilUtc == null,
+          )
+        : account;
+    await _saveAccounts(previous.accounts.map(merge).toList());
+    if (_storage.enforcesSessionGeneration && !ref.mounted) return;
+    // A keyring wait can outlive a lock. Keep the current address and account set.
+    final current = _storage.enforcesSessionGeneration
+        ? state.value ?? const AccountState()
+        : previous;
+    state = AsyncData(
+      current.copyWith(accounts: current.accounts.map(merge).toList()),
+    );
   }
 
   /// Update an account profile picture.
@@ -1318,6 +1945,20 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
   }
 
   Future<void> restoreAfterUnlock() async {
+    try {
+      await recoverPendingAccountMnemonic();
+    } catch (e) {
+      log('restoreAfterUnlock: pending passphrase recovery failed: $e');
+      if (ref.mounted) {
+        ref.read(appSecurityProvider.notifier).lock();
+        clearSensitiveStateForLock();
+      } else {
+        _storage.clearSessionPassword();
+      }
+      // The existing unlock screen shows a retry error. Never open Home while
+      // the account's required recovery writes or secret validation failed.
+      rethrow;
+    }
     final sessionGeneration = _storage.sessionGeneration;
     final prev = state.value ?? const AccountState();
     final accountUuid = prev.activeAccountUuid;
@@ -1419,6 +2060,9 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
       final prev = state.value ?? const AccountState();
       final dbPath = await _getDbPath();
       final network = await _getNetwork();
+      if (prev.accounts.isEmpty) {
+        await _assertFirstWalletDbIsEmpty(dbPath, network);
+      }
 
       final result = await rust_wallet.importHardwareAccount(
         dbPath: dbPath,
@@ -1534,6 +2178,9 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
       final prev = state.value ?? const AccountState();
       final dbPath = await _getDbPath();
       final network = await _getNetwork();
+      if (prev.accounts.isEmpty) {
+        await _assertFirstWalletDbIsEmpty(dbPath, network);
+      }
 
       final result = await rust_wallet.importHardwareAccount(
         dbPath: dbPath,
@@ -1613,7 +2260,7 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
 
       final dbPath = await _getDbPath();
       if (prev.accounts.isEmpty) {
-        await _deleteExistingDb(dbPath);
+        await _replaceDbForFirstWallet(dbPath, normalizedNetwork);
         await _storage.writeString(_networkKey, normalizedNetwork);
       }
 
@@ -1947,6 +2594,31 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
       if (file.existsSync()) {
         file.deleteSync();
       }
+    }
+  }
+
+  Future<void> _replaceDbForFirstWallet(String dbPath, String network) async {
+    await _assertFirstWalletDbIsEmpty(dbPath, network);
+    await _deleteExistingDb(dbPath);
+  }
+
+  Future<void> _assertFirstWalletDbIsEmpty(
+    String dbPath,
+    String network,
+  ) async {
+    try {
+      if (!rust_wallet.walletExists(dbPath: dbPath)) return;
+      final accounts = await rust_wallet.listAccounts(
+        dbPath: dbPath,
+        network: network,
+      );
+      if (accounts.isEmpty) return;
+      throw StateError('The wallet DB already contains an account.');
+    } catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        WalletAccountStateUncertainException(error),
+        stackTrace,
+      );
     }
   }
 }
