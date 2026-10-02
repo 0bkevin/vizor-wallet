@@ -232,6 +232,24 @@ void main() {
     cleanup.complete();
   });
 
+  for (final accountCreated in [false, true]) {
+    test(
+      'finishing setup with accountCreated=$accountCreated releases only an abandoned inspection',
+      () async {
+        final container = makeContainer();
+        final inspection = _inspection(incomingLink);
+        flow(container).beginWalletSetup(inspection, passcode: '135790');
+        if (accountCreated) wallet.create();
+        flow(container).finishWalletSetup(inspection);
+        // A repeated dispose must not clean up or clear any newer flow.
+        flow(container).finishWalletSetup(inspection);
+        await pumpEventQueue();
+        expect(container.read(giftClaimFlowProvider), isNull);
+        expect(operations.discarded, accountCreated ? isEmpty : [inspection]);
+      },
+    );
+  }
+
   test('setup keeps the claim wallet and queues the link', () async {
     final container = makeContainer();
     flow(container).open(incomingLink);

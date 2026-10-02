@@ -22,6 +22,7 @@ import '../models/vizor_payment_link.dart';
 import '../providers/gift_card_tracking_provider.dart';
 import '../providers/payment_link_claim_coordinator_provider.dart';
 import 'payment_link_received_store.dart';
+import 'gift_claim_import_store.dart';
 import 'payment_link_batch_limits.dart';
 import 'payment_link_recovery_reconciler.dart';
 import 'payment_link_recovery_store.dart';
@@ -2006,6 +2007,9 @@ class PaymentLinkService
     // deleting unsaved wallets. These guards preserve the DB without scheduling
     // a retry; the normal first-wallet handoff must keep the inspected wallet.
     if (_ref.read(appSecurityProvider).requiresUnlock) return;
+    // A partially created first account may own this inspection before its
+    // Received record is written. Its recovery journal must keep the cache.
+    if (await _ref.read(paymentLinkSetupJournalPendingProvider)()) return;
     // Only cards still retaining recovery material own a cached claim wallet.
     final record = await _receivedStore.find(inspection.link.address);
     if (record?.claimLink != null) return;
@@ -2079,6 +2083,9 @@ class PaymentLinkService
         if (!record.canRemove) {
           throw StateError('Only a Card claimed elsewhere can be removed.');
         }
+        // Cancel the durable import handoff before removing the Received card,
+        // including a handoff whose earlier cleanup was interrupted.
+        await _ref.read(giftClaimImportStoreProvider).clearForAddress(address);
         final link = record.claimLink;
         if (link != null) await _claimWallet.cancelClaimSync(link);
         // The record goes only after its wallet, so a failed delete keeps the

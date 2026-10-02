@@ -153,9 +153,6 @@ class AppSecurityNotifier extends Notifier<AppSecurityState> {
       .read(linuxKeyringCoordinatorProvider)
       .runMutation(() => _preparePasswordSetup(password));
 
-  Future<void> prepareGiftWalletPasswordSetup(String password) =>
-      preparePasswordSetup(password);
-
   Future<void> _preparePasswordSetup(String password) async {
     final lifecycleGeneration = _lifecycleGeneration;
     final requestGeneration = _unlockRequestGeneration;

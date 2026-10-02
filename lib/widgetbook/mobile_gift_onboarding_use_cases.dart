@@ -633,10 +633,6 @@ class _GiftPreviewSecurity extends AppSecurityNotifier {
   AppSecurityState build() =>
       const AppSecurityState(isPasswordConfigured: false, isUnlocked: false);
   @override
-  Future<void> prepareGiftWalletPasswordSetup(String password) =>
-      preparePasswordSetup(password);
-
-  @override
   Future<void> preparePasswordSetup(String password) async {
     _passcode = password;
   }

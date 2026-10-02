@@ -18,7 +18,7 @@ Future<String> setUpGiftCardWallet(
 }) async {
   final security = ref.read(appSecurityProvider.notifier);
   final accounts = ref.read(accountProvider.notifier);
-  await security.prepareGiftWalletPasswordSetup(passcode);
+  await security.preparePasswordSetup(passcode);
   final String uuid;
   try {
     uuid = await runWithSyncPausedForAccountMutation(
@@ -36,11 +36,9 @@ Future<String> setUpGiftCardWallet(
     final accountMayExist =
         error is GiftClaimAccountCreatedException ||
         (ref.read(accountProvider).value?.hasAccounts ?? true);
-    if (accountMayExist) {
-      security.commitPasswordSetup();
-    } else {
-      await security.rollbackPasswordSetup();
-    }
+    await security.finishPasswordSetupAfterFailure(
+      accountMayExist: accountMayExist,
+    );
     rethrow;
   }
   security.commitPasswordSetup();

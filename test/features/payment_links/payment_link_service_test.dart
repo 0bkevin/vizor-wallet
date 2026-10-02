@@ -11,6 +11,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zcash_wallet/src/core/storage/wallet_paths.dart';
+import 'package:zcash_wallet/src/core/storage/app_secure_store.dart';
+import 'package:zcash_wallet/src/features/payment_links/services/gift_claim_import_store.dart';
 import 'package:zcash_wallet/src/core/config/rpc_endpoint_config.dart';
 import 'package:zcash_wallet/src/providers/rpc_endpoint_provider.dart';
 import 'package:zcash_wallet/src/rust/frb_generated.dart';
@@ -773,6 +775,38 @@ void main() {
       expect(await store.find(record.address), isNull);
     });
 
+    test(
+      'removing a Card also cancels its interrupted import journal',
+      () async {
+        final link = _link();
+        final store = container.read(paymentLinkReceivedStoreProvider);
+        final journal = container.read(giftClaimImportStoreProvider);
+        final handoff = GiftClaimImportHandoff(
+          link: link,
+          accountUuidsBeforeSetup: const {},
+        );
+        await journal.save(handoff);
+        journal.resetMemory();
+        await store.saveReady(link);
+        await store.setAvailability(
+          link.address,
+          PaymentLinkAvailability.claimedElsewhere,
+        );
+        // Capture the handoff before deletion to model a queued recovery.
+        final previouslyLoaded = (await journal.load())!;
+        await service.removeReceivedCard(link.address);
+        var recovered = false;
+        await journal.transferToReceived(previouslyLoaded, () async {
+          recovered = true;
+          await store.saveReady(link);
+          return true;
+        });
+        expect(recovered, isFalse);
+        expect(await journal.load(), isNull);
+        expect(await store.find(link.address), isNull);
+      },
+    );
+
     for (final setupCard in [false, true]) {
       test(
         'an unfunded inspection keeps an automatic setup Card retryable=$setupCard',
@@ -803,6 +837,39 @@ void main() {
                 ? PaymentLinkAvailability.unchecked
                 : PaymentLinkAvailability.noBalance,
           );
+        },
+      );
+    }
+
+    for (final pendingSetup in [false, true]) {
+      test(
+        'inspection cleanup preserves a partial account journal=$pendingSetup',
+        () async {
+          final link = _link();
+          final wallet = container.read(Provider(PaymentLinkClaimWallet.new));
+          final directory = (await wallet.locate(link)).directory;
+          await directory.create(recursive: true);
+          if (pendingSetup) {
+            await const FlutterSecureStorage().write(
+              key: kPendingAccountMnemonicStorageKey,
+              value: 'pending encrypted account setup',
+            );
+          }
+          await service.discardClaimInspection(
+            PaymentLinkClaimInspection(
+              link: link,
+              directory: directory,
+              dbPath: '${directory.path}/zcash_wallet.db',
+              accountUuid: 'claim-account',
+              totalZatoshi: link.amountZatoshi,
+              claimableZatoshi: link.amountZatoshi,
+              feeZatoshi: BigInt.from(10000),
+              fundingConfirmationCount: 2,
+              waitingForFundingConfirmations: false,
+              availability: PaymentLinkAvailability.available,
+            ),
+          );
+          expect(await directory.exists(), pendingSetup);
         },
       );
     }

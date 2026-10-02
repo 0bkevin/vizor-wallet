@@ -134,7 +134,8 @@ it for manual claim. Restart before any recipient binding also preserves a
 single-account import for manual selection: a new UUID alone cannot prove it
 belongs to the interrupted import. Cancelling the import clears its durable
 handoff even if no live request survived. A receiving choice already saved
-survives interruption during journal cleanup.
+survives interruption during journal cleanup. Removing a received card cancels
+its matching handoff before deletion so restart recovery cannot recreate it.
 
 ### Execution and recovery
 
@@ -188,6 +189,11 @@ A failed cleanup blocks a replacement credential until retry succeeds. Successfu
 hardware/Wallet Link setup clears its start marker without deleting a pending
 mnemonic journal. Forgot passcode explicitly warns that resetting an unbacked
 account makes its funds unrecoverable.
+
+Abandoned Customise inspections are released only when no account handoff owns
+them. The cleanup service preserves a cache while account-setup recovery material
+is pending. The existing lock-time cleanup guard still defers deletion; scheduling
+that deferred cleanup across unlock/restart remains a separate follow-up.
 
 Mobile root back dispatch includes Gift routes, and the themed system-bar region
 restores icon contrast after leaving Welcome in the same light/dark theme.
@@ -292,6 +298,22 @@ OS process-restart test.
 Known follow-up: the deferred failure toast is in memory. Restart before Home
 can lose the notice while the card remains durably recoverable in Received.
 Persisting unseen notices is separate from the completed flow connection.
+
+The subsequent local repair passed 436 selected tests with mobile tokens and
+59 selected tests with desktop tokens, including ordinary setup, BIP39 import,
+partial storage failure/restart, rollback, claim retry, cancellation, removal,
+privacy lock, root back, and notification replacement. These counts overlap.
+Scoped analysis of 34 changed Dart files found no issues. Deterministic mobile
+captures confirmed the reset warning in both themes at 393 × 852. Native
+Rust/storage adapters were faked or fault-injected for these tests; the earlier
+native results above do not validate this subsequent patch. Native E2E, Android
+Activity behavior, and Linux concurrent keyring operations were not rerun.
+
+Separate follow-ups remain: confirmation evidence for nonstandard/split card
+funding, and a typed Rust execution outcome that can distinguish definitive
+pre-broadcast failure from interrupted/ambiguous submission. The current patch
+retains ambiguous submission state; moving the durable submission marker after
+the Rust call would lose recovery for broadcasts interrupted before returning.
 
 ## Implementation references
 

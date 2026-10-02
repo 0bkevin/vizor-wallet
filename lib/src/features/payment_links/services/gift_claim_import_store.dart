@@ -149,6 +149,21 @@ class GiftClaimImportStore {
     _loaded = true;
   });
 
+  Future<void> clearForAddress(String address) => _exclusive(() async {
+    GiftClaimImportHandoff? saved;
+    try {
+      saved = await _load();
+    } on FormatException {
+      // An unreadable journal cannot resurrect this card; retain it separately.
+      return;
+    }
+    if (saved?.link.address != address) return;
+    await _storage.delete();
+    _cached = null;
+    _loaded = true;
+    hasLiveHandoff = false;
+  });
+
   void releaseLiveHandoff() => hasLiveHandoff = false;
 
   void resetMemory() {

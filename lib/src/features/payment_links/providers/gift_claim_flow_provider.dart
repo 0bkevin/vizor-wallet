@@ -154,8 +154,14 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
         !identical(state?.inspection, inspection)) {
       return;
     }
+    final finished = state;
     _generation++;
     state = null;
+    // A completed account/Received handoff owns the cache. If setup was
+    // abandoned earlier, discard it; the service also protects partial journals.
+    if (ref.read(walletProvider).value?.hasWallet != true) {
+      _queueInspectionCleanup(finished);
+    }
   }
 
   /// Starts checking [link] unless the same Card is already open.
