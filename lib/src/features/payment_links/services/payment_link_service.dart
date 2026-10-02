@@ -1385,6 +1385,7 @@ class PaymentLinkService
           .prepareSetupClaim(
             link,
             destinationAccountUuid: setupAccountUuid,
+            allowLongSync: allowLongSync,
             prepare: () async {
               final inspection = await inspectClaim(
                 link,
@@ -1727,7 +1728,12 @@ class PaymentLinkService
           : evidence.allFundsSpentElsewhere
           ? PaymentLinkAvailability.claimedElsewhere
           : PaymentLinkAvailability.noBalance;
-      if (existingRecord != null) {
+      // An automatic setup inspection is a preview until the coordinator
+      // commits its outcome. A pause must not turn a retryable Card into
+      // noBalance before retainPendingClaim gets a chance to run.
+      if (existingRecord != null &&
+          !(existingRecord.status == PaymentLinkReceivedStatus.readyToClaim &&
+              existingRecord.setupAccountUuid != null)) {
         await _receivedStore.setAvailability(link.address, availability);
       }
       final waitingForFundingConfirmations = paymentLinkShouldWaitForFunding(

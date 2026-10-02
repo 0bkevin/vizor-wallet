@@ -31,7 +31,6 @@ import 'package:zcash_wallet/src/features/payment_links/services/payment_link_cl
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_received_store.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_service.dart';
 import 'package:zcash_wallet/src/features/payment_links/widgets/payment_link_copy.dart';
-import 'package:zcash_wallet/src/features/payment_links/widgets/payment_link_claim_outcome_view.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/gift_claim_failure_notice_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_claim_coordinator_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/gift_claim_import_store.dart';
@@ -862,16 +861,18 @@ void main() {
               .single;
       expect(saved.setupAccountUuid, 'new-account');
       expect(saved.status, PaymentLinkReceivedStatus.readyToClaim);
+      expect(saved.availability, isNot(PaymentLinkAvailability.failed));
       final index = GiftCardActivityIndex.forAccount(
         accountUuid: 'new-account',
         createdRecords: const [],
         receivedRecords: [saved],
       );
       expect(index.withPendingClaims(const []), isEmpty);
+      operations.bindFails = false; // The connection recovers before retry.
       await tester.tap(find.text('View card'));
       await tester.pumpAndSettle();
       expect(location(tester), '/payment-links');
-      expect(find.byType(PaymentLinkClaimOutcomeView), findsOneWidget);
+      expect(find.text('Claim the gift'), findsOneWidget);
       expect(find.byType(AppToast), findsNothing);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
@@ -974,27 +975,29 @@ void main() {
     expect(recovered?.accountUuidsBeforeSetup, isEmpty);
   });
 
-  testWidgets('restart after import binds and claims the saved Card', (
-    tester,
-  ) async {
-    final container = await pumpWelcome(tester);
-    container
-        .read(paymentLinkIntakeProvider.notifier)
-        .receive(paymentLinkNavigationLink.toUri().toString());
-    await tester.pumpAndSettle();
-    await tester.tap(keyed('gift_claim_claim_with_an_existing_wallet'));
-    await tester.pumpAndSettle();
-    // Lose the first process's queues and inspection, keeping OS secure storage.
-    final restarted = await pumpWelcome(tester, restored: true);
-    await tester.pumpAndSettle();
-    final record =
-        (await restarted.read(paymentLinkReceivedStoreProvider).load()).single;
-    expect(record.setupAccountUuid, 'new-account');
-    expect(record.destinationAccountUuid, 'new-account');
-    expect(record.status, PaymentLinkReceivedStatus.receiving);
-    expect(operations.claimedDestinations, ['new-account']);
-    expect(await restarted.read(giftClaimImportStoreProvider).load(), isNull);
-  });
+  testWidgets(
+    'restart before binding preserves the Card for recipient selection',
+    (tester) async {
+      final container = await pumpWelcome(tester);
+      container
+          .read(paymentLinkIntakeProvider.notifier)
+          .receive(paymentLinkNavigationLink.toUri().toString());
+      await tester.pumpAndSettle();
+      await tester.tap(keyed('gift_claim_claim_with_an_existing_wallet'));
+      await tester.pumpAndSettle();
+      // Lose the first process's queues and inspection, keeping OS secure storage.
+      final restarted = await pumpWelcome(tester, restored: true);
+      await tester.pumpAndSettle();
+      final record =
+          (await restarted.read(paymentLinkReceivedStoreProvider).load())
+              .single;
+      expect(record.setupAccountUuid, isNull);
+      expect(record.destinationAccountUuid, isNull);
+      expect(record.status, PaymentLinkReceivedStatus.readyToClaim);
+      expect(operations.claimedDestinations, isEmpty);
+      expect(await restarted.read(giftClaimImportStoreProvider).load(), isNull);
+    },
+  );
 
   for (final selected in [false, true]) {
     testWidgets(
@@ -1289,6 +1292,18 @@ class _GiftOperations extends PendingClaimPaymentLinkOperations {
   final allowLongSyncChecks = <bool>[];
   PaymentLinkClaimBroadcastStatus claimStatus =
       PaymentLinkClaimBroadcastStatus.broadcasted;
+
+  @override
+  Future<PaymentLinkClaimSession> prepareClaim(
+    VizorPaymentLink link, {
+    bool allowLongSync = false,
+  }) async {
+    final saved = await _store.find(link.address);
+    return bindClaimDestination(
+      await inspectClaim(link, allowLongSync: allowLongSync),
+      destinationAccountUuid: saved?.setupAccountUuid ?? 'new-account',
+    );
+  }
 
   @override
   Future<PaymentLinkClaimSession> bindClaimDestination(

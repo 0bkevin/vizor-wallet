@@ -114,7 +114,7 @@ class GiftClaimImportStore {
       _cached = handoff;
       _loaded = true;
       return handoff;
-    } on FormatException {
+    } catch (_) {
       // Recovery logs the exception. Never echo a malformed bearer payload.
       throw const FormatException('Invalid stored gift import handoff.');
     }
@@ -129,6 +129,24 @@ class GiftClaimImportStore {
     _cached = null;
     _loaded = true;
     hasLiveHandoff = false;
+  });
+
+  /// Cancellation and transfer share the same queue. A recovery that loaded a
+  /// handoff before removal must recheck it before recreating the Received card.
+  Future<void> transferToReceived(
+    GiftClaimImportHandoff expected,
+    Future<bool> Function() saveReceived,
+  ) => _exclusive(() async {
+    final saved = await _load();
+    if (hasLiveHandoff ||
+        saved == null ||
+        !saved.link.hasSameCanonicalPayload(expected.link)) {
+      return;
+    }
+    if (!await saveReceived()) return;
+    await _storage.delete();
+    _cached = null;
+    _loaded = true;
   });
 
   void releaseLiveHandoff() => hasLiveHandoff = false;

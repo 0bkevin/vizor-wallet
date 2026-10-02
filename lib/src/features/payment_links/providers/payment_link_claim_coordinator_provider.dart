@@ -96,6 +96,8 @@ final paymentLinkSetupJournalPendingProvider =
       };
     });
 
+enum _SetupClaimFailurePhase { preparation, submission }
+
 /// Owns claim work whose lifetime must not depend on a Gift Card screen.
 ///
 /// Different addresses submit independently. Repeated submission of the same
@@ -108,8 +110,7 @@ class PaymentLinkClaimCoordinator {
   final Ref _ref;
   final Map<String, _AccountClaimOperation<PaymentLinkClaimResult>>
   _submissions = {};
-  final Map<String, _AccountClaimOperation<PaymentLinkClaimSession>>
-  _setupPreparations = {};
+  final Map<String, _SetupClaimPreparation> _setupPreparations = {};
   final Map<String, _AccountClaimOperation<void>> _setupHandoffs = {};
   final Set<Future<void>> _retentions = {};
   Future<List<PaymentLinkReceivedRecord>>? _recoveryInFlight;
@@ -133,6 +134,7 @@ class PaymentLinkClaimCoordinator {
   Future<PaymentLinkClaimSession> prepareSetupClaim(
     VizorPaymentLink link, {
     required String destinationAccountUuid,
+    bool allowLongSync = true,
     required PaymentLinkSetupClaimPreparation prepare,
   }) {
     if (_resetQuiesced) {
@@ -148,12 +150,26 @@ class PaymentLinkClaimCoordinator {
     }
     final existing = _setupPreparations[claimId];
     if (existing != null) {
-      if (existing.destinationAccountUuid != destinationAccountUuid) {
+      if (existing.destinationAccountUuid != destinationAccountUuid ||
+          !existing.link.hasSameCanonicalPayload(link)) {
         return Future.error(
           const PaymentLinkClaimDestinationChangedException(),
         );
       }
-      return existing.future;
+      if (existing.allowLongSync || !allowLongSync) return existing.future;
+      // Serialize scans of the same claim wallet. If this caller permits the
+      // long scan an earlier caller refused, retry only that refusal afterward.
+      return existing.future.catchError((Object error) {
+        if (error is! PaymentLinkLongSyncConfirmationRequired) {
+          throw error;
+        }
+        return prepareSetupClaim(
+          link,
+          destinationAccountUuid: destinationAccountUuid,
+          allowLongSync: allowLongSync,
+          prepare: prepare,
+        );
+      });
     }
 
     late final Future<PaymentLinkClaimSession> tracked;
@@ -170,9 +186,11 @@ class PaymentLinkClaimCoordinator {
             _setupPreparations.remove(claimId);
           }
         });
-    _setupPreparations[claimId] = _AccountClaimOperation(
+    _setupPreparations[claimId] = _SetupClaimPreparation(
       destinationAccountUuid: destinationAccountUuid,
       future: tracked,
+      link: link,
+      allowLongSync: allowLongSync,
     );
     return tracked;
   }
@@ -214,6 +232,7 @@ class PaymentLinkClaimCoordinator {
     PaymentLinkClaimInspection inspection,
     String destinationAccountUuid,
   ) async {
+    var failurePhase = _SetupClaimFailurePhase.preparation;
     try {
       if (!_canRunRecovery) {
         throw StateError('The wallet is not ready to claim the Gift Card.');
@@ -236,13 +255,14 @@ class PaymentLinkClaimCoordinator {
         ),
       );
       if (!_canRunRecovery) return;
+      if (session.canClaim) failurePhase = _SetupClaimFailurePhase.submission;
       await _submitOrRetainSetupClaim(session);
       await _reportSetupFailure(inspection.link, destinationAccountUuid);
     } catch (error, stackTrace) {
       await _reportSetupFailure(
         inspection.link,
         destinationAccountUuid,
-        operationFailed: true,
+        failurePhase: failurePhase,
       );
       Error.throwWithStackTrace(error, stackTrace);
     }
@@ -251,7 +271,7 @@ class PaymentLinkClaimCoordinator {
   Future<void> _reportSetupFailure(
     VizorPaymentLink link,
     String accountUuid, {
-    bool operationFailed = false,
+    _SetupClaimFailurePhase? failurePhase,
   }) async {
     if (kAppFormFactor != AppFormFactor.mobile || !_canRunRecovery) return;
     final store = _ref.read(paymentLinkReceivedStoreProvider);
@@ -269,8 +289,10 @@ class PaymentLinkClaimCoordinator {
         record.availability == PaymentLinkAvailability.failed ||
         record.availability == PaymentLinkAvailability.rejected ||
         record.availability == PaymentLinkAvailability.claimedElsewhere;
-    if (!failed && (!operationFailed || record.isClaimInFlight)) return;
-    if (!failed) {
+    if (!failed && (failurePhase == null || record.isClaimInFlight)) return;
+    // Preparation errors remain retryable. A user-triggered attempt can still
+    // show its failure notice without converting a network timeout to terminal.
+    if (!failed && failurePhase == _SetupClaimFailurePhase.submission) {
       await store.setAvailability(link.address, PaymentLinkAvailability.failed);
     }
     if (!_canRunRecovery) return;
@@ -289,18 +311,18 @@ class PaymentLinkClaimCoordinator {
     final currentAccountUuids =
         accounts?.accounts.map((a) => a.uuid) ?? const <String>[];
     if (handoff.importedAccountUuids(currentAccountUuids).isEmpty) return;
-    final recipient = handoff.recipientAccountUuid(
-      currentAccountUuids: currentAccountUuids,
-    );
     await trackRetention(() async {
       if (!_canRunRecovery) return;
-      // A multi-account import interrupted before selection stays in Received
-      // for manual claim. saveReady preserves a recipient already confirmed
-      // before the interruption; never infer one from the active account.
-      await _ref
-          .read(paymentLinkReceivedStoreProvider)
-          .saveReady(handoff.link, setupAccountUuid: recipient);
-      await journal.clear(handoff);
+      // Only the live import can identify its recipient. After interruption,
+      // a newly listed UUID alone is not proof it belongs to this import.
+      // Preserve an already saved binding; otherwise recover for manual claim.
+      await journal.transferToReceived(handoff, () async {
+        if (!_canRunRecovery) return false;
+        await _ref
+            .read(paymentLinkReceivedStoreProvider)
+            .saveReady(handoff.link);
+        return true;
+      });
     });
   }
 
@@ -459,7 +481,13 @@ class PaymentLinkClaimCoordinator {
 
     var retry = true;
     try {
-      await _restoreImportHandoff();
+      try {
+        await _restoreImportHandoff();
+      } catch (error) {
+        // One unreadable handoff must not stop other durable Received claims.
+        // Preserve its bearer material for a later retry or explicit cancel.
+        debugPrint('Gift import recovery deferred: ${error.runtimeType}');
+      }
       if (!_canRunRecovery) return const [];
       final records = await _ref.read(paymentLinkClaimRecoveryRunnerProvider)();
       await _resumeReadySetupClaims(records);
@@ -520,11 +548,7 @@ class PaymentLinkClaimCoordinator {
           ),
         );
       } catch (error, stackTrace) {
-        await _reportSetupFailure(
-          link,
-          destinationAccountUuid,
-          operationFailed: true,
-        );
+        await _reportSetupFailure(link, destinationAccountUuid);
         debugPrint(
           '[zcash] PaymentLinkClaim: automatic setup claim preparation failed '
           'type=${error.runtimeType}\n$stackTrace',
@@ -542,7 +566,7 @@ class PaymentLinkClaimCoordinator {
         await _reportSetupFailure(
           link,
           destinationAccountUuid,
-          operationFailed: true,
+          failurePhase: _SetupClaimFailurePhase.submission,
         );
         debugPrint(
           '[zcash] PaymentLinkClaim: automatic setup claim submission failed '
@@ -615,6 +639,19 @@ class _AccountClaimOperation<T> {
   final Future<T> future;
 }
 
+class _SetupClaimPreparation
+    extends _AccountClaimOperation<PaymentLinkClaimSession> {
+  const _SetupClaimPreparation({
+    required super.destinationAccountUuid,
+    required super.future,
+    required this.link,
+    required this.allowLongSync,
+  });
+
+  final VizorPaymentLink link;
+  final bool allowLongSync;
+}
+
 final paymentLinkClaimCoordinatorProvider = Provider((ref) {
   final coordinator = PaymentLinkClaimCoordinator(ref);
   final lifecycleRegistry = ref.read(paymentLinkClaimLifecycleRegistryProvider);
@@ -650,6 +687,9 @@ final paymentLinkClaimCoordinatorProvider = Provider((ref) {
         true) {
       coordinator.resume();
     }
+  });
+  ref.listen(accountSetupRecoveryGenerationProvider, (_, _) {
+    coordinator.resume();
   });
 
   final lifecycleListener = AppLifecycleListener(

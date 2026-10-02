@@ -123,16 +123,18 @@ for a passcode again; keep the bearer journal for recovery. A durable account
 keeps its credential and routes to unlock. An unreadable account DB blocks
 startup without removing either credential or journal.
 
-A sole imported account receives the card automatically. Multiple imported
-accounts reuse **Choose receiving account**, including additional ZIP32 accounts.
+In a live import, a sole imported account receives the card automatically.
+Multiple imported accounts reuse **Choose receiving account**, including additional ZIP32 accounts.
 Confirmation switches Home to that account, saves the pinned recipient, registers
 the existing inspection, and clears the import journal before Face ID.
 
 Closing the sheet continues to Face ID/Home with an unbound, unclaimed card in
 **Settings > My gift cards > Received**. Restart before selection also preserves
-it for manual claim. Recovery never guesses the recipient from the active
-account, and a receiving choice already saved survives interruption during
-journal cleanup.
+it for manual claim. Restart before any recipient binding also preserves a
+single-account import for manual selection: a new UUID alone cannot prove it
+belongs to the interrupted import. Cancelling the import clears its durable
+handoff even if no live request survived. A receiving choice already saved
+survives interruption during journal cleanup.
 
 ### Execution and recovery
 
@@ -141,10 +143,15 @@ journal cleanup.
   this handoff.** Existing later claim/recovery scans remain unchanged.
 - Confirmation waiting remains pending. Definitive rejection/failure stays
   actionable in Received. An uncertain submission retains recovery state rather
-  than being treated as a definite failure.
+  than being treated as a definite failure. Preparation timeouts remain
+  retryable; pausing an inspection does not persist an intermediate no-balance
+  result onto an automatically recoverable setup card. A malformed import
+  handoff is preserved and cannot block recovery of other Received cards.
 - Eligible saved setup claims can resume after restart, unlock, foreground
   entry, or the existing retry timer, after setup journals/start markers are
-  cleared. Account switching cannot redirect them to another recipient.
+  cleared. Completing durable account recovery explicitly wakes claim recovery,
+  including when the account UUID was already present. Account switching cannot
+  redirect claims to another recipient.
 - Failed, rejected, spent-elsewhere, archived, and terminal empty cards do not
   automatically submit. A missing receiving account is not substituted.
 - Submitted claims use the existing Home Activity transaction identity. Waiting

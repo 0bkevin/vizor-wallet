@@ -773,6 +773,40 @@ void main() {
       expect(await store.find(record.address), isNull);
     });
 
+    for (final setupCard in [false, true]) {
+      test(
+        'an unfunded inspection keeps an automatic setup Card retryable=$setupCard',
+        () async {
+          final link = _link();
+          api
+            ..poolFixture = true
+            ..emptyClaimWallet = true
+            ..claimHistory = [];
+          final wallet = container.read(Provider(PaymentLinkClaimWallet.new));
+          final location = await wallet.locate(link);
+          await location.directory.create(recursive: true);
+          await File(location.dbPath).writeAsString('claim DB fixture');
+          final store = container.read(paymentLinkReceivedStoreProvider);
+          await store.saveReady(
+            link,
+            setupAccountUuid: setupCard ? 'receiver' : null,
+          );
+          final inspection = await service.inspectClaim(
+            link,
+            allowLongSync: true,
+          );
+          expect(inspection.availability, PaymentLinkAvailability.noBalance);
+          expect(inspection.waitingForFundingConfirmations, isTrue);
+          expect(
+            (await store.find(link.address))!.availability,
+            setupCard
+                ? PaymentLinkAvailability.unchecked
+                : PaymentLinkAvailability.noBalance,
+          );
+        },
+      );
+    }
+
     test('a Card that may still hold funds is not removed', () async {
       final store = container.read(paymentLinkReceivedStoreProvider);
       final wallet = container.read(Provider(PaymentLinkClaimWallet.new));
@@ -2693,6 +2727,7 @@ class _ClaimDestinationRustApi implements RustLibApi {
   Completer<String>? lookupGate;
   int failures = 0;
   bool poolFixture = false;
+  bool emptyClaimWallet = false;
   List<String> localClaimTxids = [];
   List<String> conflictedTxids = [];
   List<rust_sync.TransactionInfo>? claimHistory;
@@ -2717,9 +2752,45 @@ class _ClaimDestinationRustApi implements RustLibApi {
     required String accountUuid,
     required String toAddress,
   }) {
+    if (emptyClaimWallet) {
+      return Future.error(StateError('Insufficient balance'));
+    }
     estimateStarted.complete();
     return estimateGate!.future;
   }
+
+  @override
+  Future<BigInt> crateApiWalletGetLatestBlockHeight({
+    required String lightwalletdUrl,
+    required String network,
+  }) async => BigInt.from(_link().birthdayHeight + 1);
+
+  @override
+  Future<rust_sync.WalletBalance> crateApiSyncGetBalance({
+    required String dbPath,
+    required String network,
+    required String accountUuid,
+  }) async => rust_sync.WalletBalance(
+    availability: rust_sync.WalletBalanceAvailability.available,
+    transparent: BigInt.zero,
+    sapling: BigInt.zero,
+    orchard: BigInt.zero,
+    ironwood: BigInt.zero,
+    transparentLocked: BigInt.zero,
+    saplingLocked: BigInt.zero,
+    orchardLocked: BigInt.zero,
+    ironwoodLocked: BigInt.zero,
+    transparentPending: BigInt.zero,
+    saplingPending: BigInt.zero,
+    orchardPending: BigInt.zero,
+    ironwoodPending: BigInt.zero,
+    changePendingConfirmation: BigInt.zero,
+    valuePendingSpendability: BigInt.zero,
+    uneconomicValue: BigInt.zero,
+    spendable: BigInt.zero,
+    locked: BigInt.zero,
+    total: BigInt.zero,
+  );
 
   @override
   Future<List<rust_wallet.AccountInfo>> crateApiWalletListAccounts({
@@ -2838,6 +2909,7 @@ class _ClaimDestinationRustApi implements RustLibApi {
     lookupGate = null;
     failures = 0;
     poolFixture = false;
+    emptyClaimWallet = false;
     localClaimTxids = [];
     conflictedTxids = [];
     claimHistory = null;

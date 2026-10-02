@@ -100,6 +100,65 @@ void main() {
     expect(coordinator.activeSetupPreparationCount, 0);
   });
 
+  test(
+    'long-scan approval retries an unapproved shared preparation serially',
+    () async {
+      final first = Completer<void>();
+      var active = 0;
+      var maxActive = 0;
+      var calls = 0;
+      final container = ProviderContainer(
+        overrides: [
+          appSecurityProvider.overrideWith(_UnlockedSecurityNotifier.new),
+          paymentLinkClaimRecoveryRunnerProvider.overrideWithValue(
+            () async => const [],
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final coordinator = container.read(paymentLinkClaimCoordinatorProvider);
+      final link = _link('long-scan-card');
+      final unapproved = coordinator.prepareSetupClaim(
+        link,
+        destinationAccountUuid: 'setup-account',
+        allowLongSync: false,
+        prepare: () async {
+          calls++;
+          active++;
+          maxActive = active;
+          await first.future;
+          active--;
+          throw const PaymentLinkLongSyncConfirmationRequired();
+        },
+      );
+      final rejected = expectLater(
+        unapproved,
+        throwsA(isA<PaymentLinkLongSyncConfirmationRequired>()),
+      );
+      final approved = coordinator.prepareSetupClaim(
+        link,
+        destinationAccountUuid: 'setup-account',
+        allowLongSync: true,
+        prepare: () async {
+          calls++;
+          active++;
+          if (active > maxActive) maxActive = active;
+          active--;
+          return _session(
+            link.address,
+            destinationAccountUuid: 'setup-account',
+          );
+        },
+      );
+      expect(calls, 1);
+      first.complete();
+      await rejected;
+      expect((await approved).destinationAccountUuid, 'setup-account');
+      expect(calls, 2);
+      expect(maxActive, 1);
+    },
+  );
+
   test('a setup Card preparation stays pinned to its first account', () async {
     final releasePreparation = Completer<void>();
     final container = ProviderContainer(

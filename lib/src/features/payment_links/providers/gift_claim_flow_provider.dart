@@ -75,10 +75,11 @@ class GiftClaimSetupReturnNotifier extends Notifier<GiftClaimSetupReturn?> {
   }
 
   Future<void> clear() async {
-    final request = state;
+    final request =
+        state ?? await ref.read(giftClaimImportStoreProvider).load();
     if (request == null) return;
     await ref.read(giftClaimImportStoreProvider).clear(request);
-    clearIfMatches(request);
+    if (identical(state, request)) state = null;
   }
 
   /// Completes only the handoff this caller started. A newer Card may have
@@ -193,10 +194,8 @@ class GiftClaimFlowNotifier extends Notifier<GiftClaimFlowState?> {
   Future<void> close() async {
     final current = state;
     _generation++;
-    if (ref.read(giftClaimSetupReturnProvider) != null) {
-      await ref.read(giftClaimSetupReturnProvider.notifier).clear();
-      if (!ref.mounted || !identical(state, current)) return;
-    }
+    await ref.read(giftClaimSetupReturnProvider.notifier).clear();
+    if (!ref.mounted || !identical(state, current)) return;
     state = null;
     _queueInspectionCleanup(current);
     final pending = ref.read(paymentLinkIntakeProvider).pendingLink;

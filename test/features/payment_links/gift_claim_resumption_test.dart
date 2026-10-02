@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zcash_wallet/src/core/storage/app_secure_store.dart';
 import 'package:zcash_wallet/src/features/activity/gift_card_activity_index.dart';
 import 'package:zcash_wallet/src/features/payment_links/models/vizor_payment_link.dart';
+import 'package:zcash_wallet/src/features/payment_links/services/gift_claim_import_store.dart';
+import 'package:zcash_wallet/src/features/payment_links/providers/gift_claim_flow_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_claim_coordinator_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_claim_lifecycle_registry_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_received_store.dart';
@@ -18,6 +20,123 @@ import 'package:zcash_wallet/src/rust/api/sync.dart' as rust_sync;
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
+  test(
+    'a transient preparation timeout is retried without marking the Card failed',
+    () async {
+      final operations = await _operations();
+      var calls = 0;
+      final container = _container(
+        operations,
+        recover: true,
+        preparer: (link, {required destinationAccountUuid}) async {
+          calls++;
+          if (calls == 1) throw TimeoutException('temporary timeout');
+          return operations.bindClaimDestination(
+            _inspection(),
+            destinationAccountUuid: destinationAccountUuid,
+          );
+        },
+      );
+      addTearDown(container.dispose);
+      final coordinator = container.read(paymentLinkClaimCoordinatorProvider);
+      await coordinator.refresh();
+      expect(
+        (await operations.store.load()).single.availability,
+        isNot(PaymentLinkAvailability.failed),
+      );
+      await coordinator.refresh();
+      expect(calls, 2);
+      expect(operations.submitCalls, 1);
+    },
+  );
+
+  test(
+    'cancelling a restarted import removes the durable handoff before later account creation',
+    () async {
+      final journal = GiftClaimImportStore(storage: _ImportStorage());
+      await journal.save(
+        GiftClaimImportHandoff(link: _link, accountUuidsBeforeSetup: {}),
+      );
+      journal.resetMemory();
+      final operations = _Operations(_Storage());
+      final container = _container(
+        operations,
+        importStore: journal,
+        recover: true,
+      );
+      addTearDown(container.dispose);
+      expect(container.read(giftClaimSetupReturnProvider), isNull);
+      await container.read(giftClaimSetupReturnProvider.notifier).clear();
+      expect(await journal.load(), isNull);
+      await container.read(paymentLinkClaimCoordinatorProvider).refresh();
+      expect(operations.submitCalls, 0);
+      expect(await operations.store.load(), isEmpty);
+    },
+  );
+
+  test(
+    'a restarted import never infers its recipient from a later UUID',
+    () async {
+      final journal = GiftClaimImportStore(storage: _ImportStorage());
+      await journal.save(
+        GiftClaimImportHandoff(link: _link, accountUuidsBeforeSetup: {}),
+      );
+      journal.resetMemory();
+      final operations = _Operations(_Storage());
+      final container = _container(
+        operations,
+        importStore: journal,
+        recover: true,
+      );
+      addTearDown(container.dispose);
+      await container.read(paymentLinkClaimCoordinatorProvider).refresh();
+      expect(operations.submitCalls, 0);
+      expect((await operations.store.load()).single.setupAccountUuid, isNull);
+      expect((await operations.store.load()).single.claimLink, isNotNull);
+    },
+  );
+
+  test(
+    'a malformed import handoff cannot stop an existing Received claim',
+    () async {
+      final journal = GiftClaimImportStore(
+        storage: _ImportStorage()..value = '{',
+      );
+      final operations = await _operations();
+      final container = _container(
+        operations,
+        importStore: journal,
+        recover: true,
+      );
+      addTearDown(container.dispose);
+      await container.read(paymentLinkClaimCoordinatorProvider).refresh();
+      expect(operations.submitCalls, 1);
+      await expectLater(journal.load(), throwsFormatException);
+    },
+  );
+
+  test(
+    'durable recovery completion wakes an existing UUID after its Card is saved',
+    () async {
+      final operations = _Operations(_Storage());
+      final container = _container(operations, recover: true);
+      addTearDown(container.dispose);
+      final coordinator = container.read(paymentLinkClaimCoordinatorProvider);
+      await coordinator.refresh();
+      await operations.store.saveReady(
+        _link,
+        setupAccountUuid: 'setup-account',
+      );
+      container
+          .read(accountSetupRecoveryGenerationProvider.notifier)
+          .completed();
+      await operations.submissionSaved.future.timeout(
+        const Duration(seconds: 1),
+      );
+      expect(operations.submitCalls, 1);
+    },
+  );
 
   test(
     'handoff binds once without a scan and reset drains the submission',
@@ -296,8 +415,14 @@ ProviderContainer _container(
   _Security? security,
   AccountNotifier? accounts,
   bool recover = false,
+  GiftClaimImportStore? importStore,
+  PaymentLinkSetupClaimPreparer? preparer,
 }) => ProviderContainer(
   overrides: [
+    if (importStore != null)
+      giftClaimImportStoreProvider.overrideWithValue(importStore),
+    if (preparer != null)
+      paymentLinkSetupClaimPreparerProvider.overrideWithValue(preparer),
     appSecurityProvider.overrideWith(() => security ?? _Security()),
     accountProvider.overrideWith(() => accounts ?? _Accounts()),
     paymentLinkOperationsProvider.overrideWithValue(operations),
@@ -481,4 +606,14 @@ class _RecoveringAccounts extends _Accounts {
   AccountState build() => const AccountState();
 
   void restoreForTest() => state = AsyncData(super.build());
+}
+
+class _ImportStorage implements GiftClaimImportStorage {
+  String? value;
+  @override
+  Future<String?> read() async => value;
+  @override
+  Future<void> write(String next) async => value = next;
+  @override
+  Future<void> delete() async => value = null;
 }
