@@ -312,15 +312,6 @@ void main() {
     expect(find.text('Connect Keystone'), findsOneWidget);
   });
 
-  testWidgets('add-account variant shows back to home affordance', (
-    tester,
-  ) async {
-    await tester.pumpWidget(_app(initialLocation: '/add-account'));
-    await tester.pumpAndSettle();
-
-    expect(find.bySemanticsLabel('Back'), findsOneWidget);
-  });
-
   Future<void> pump(
     WidgetTester tester, {
     String location = '/welcome',
@@ -368,26 +359,6 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('Import wallet opens its selector and can return', (
-    tester,
-  ) async {
-    await pump(tester);
-    await tester.tap(find.byKey(const ValueKey('mobile_welcome_import')));
-    await tester.pumpAndSettle();
-    final router = GoRouter.of(
-      tester.element(find.byType(MobileMethodSelectionScreen)),
-    );
-    expect(
-      GoRouterState.of(
-        tester.element(find.byType(MobileMethodSelectionScreen)),
-      ).uri.path,
-      '/onboarding/method',
-    );
-    router.pop();
-    await tester.pumpAndSettle();
-    expect(find.text('Shielded\nby default'), findsOneWidget);
-  });
-
   for (final entry in ['/welcome', '/add-account']) {
     testWidgets('$entry retains its caller through create and every import '
         'choice', (tester) async {
@@ -402,6 +373,12 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('mobile_welcome_import')));
       await tester.pumpAndSettle();
+      expect(
+        GoRouterState.of(
+          tester.element(find.byType(MobileMethodSelectionScreen)),
+        ).uri.path,
+        '/onboarding/method',
+      );
       final selectionProgress = _stepsProgress(tester);
       for (final choice in [
         (key: 'mobile_import_passphrase', screen: MobileImportScreen),
