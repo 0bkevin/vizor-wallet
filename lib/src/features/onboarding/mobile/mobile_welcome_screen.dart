@@ -183,7 +183,7 @@ class MobileWelcomeScreen extends StatelessWidget {
                                               growWithContent: true,
                                               constrainContent: true,
                                               child: const Text(
-                                                'Activate Gift Card',
+                                                'Activate gift card',
                                                 style: TextStyle(
                                                   color: WelcomeButtonTokens
                                                       .accentLabel,

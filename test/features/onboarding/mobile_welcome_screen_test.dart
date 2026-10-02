@@ -328,6 +328,7 @@ void main() {
     (tester) async {
       await pump(tester);
       expect(find.text('Shielded\nby default'), findsOneWidget);
+      expect(find.text('Activate gift card'), findsOneWidget);
       for (final key in [
         'mobile_welcome_get_started',
         'mobile_welcome_import',
@@ -414,7 +415,7 @@ void main() {
     tester,
   ) async {
     await pump(tester, location: '/add-account');
-    expect(find.text('Activate Gift Card'), findsNothing);
+    expect(find.text('Activate gift card'), findsNothing);
     expect(
       find.byKey(const ValueKey('mobile_welcome_redeem_card')),
       findsNothing,
