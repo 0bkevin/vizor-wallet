@@ -162,8 +162,8 @@ abstract interface class PaymentLinkOperations {
   ///
   /// Uses the existing inspection database without another sync. Inspection
   /// readiness is a snapshot, not a guarantee that a later claim will succeed.
-  /// See docs/plans/mobile-gift-claim-execution-policy.md for the onboarding
-  /// handoff and the existing Received-card failure/recovery surface.
+  /// See docs/onboarding.md for the handoff and the existing Received-card
+  /// failure/recovery surface.
   Future<PaymentLinkClaimSession> bindClaimDestination(
     PaymentLinkClaimInspection inspection, {
     required String destinationAccountUuid,
