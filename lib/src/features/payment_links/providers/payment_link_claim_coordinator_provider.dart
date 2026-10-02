@@ -43,7 +43,12 @@ final paymentLinkClaimRecoveryRunnerProvider =
       final operations = ref.watch(paymentLinkOperationsProvider);
       return () async {
         final records = await operations.loadReceivedLinkRecoveries();
-        if (!records.any((record) => record.needsClaimRecovery)) {
+        if (!records.any(
+          (record) =>
+              record.needsClaimRecovery ||
+              (record.status == PaymentLinkReceivedStatus.readyToClaim &&
+                  record.setupAccountUuid != null),
+        )) {
           return records;
         }
         return operations.inspectReceivedLinkClaims(records);
@@ -464,7 +469,7 @@ class PaymentLinkClaimCoordinator {
       }
       retry = records.any(
         (record) =>
-            record.needsClaimRecovery || _shouldRetryReadySetupClaim(record),
+            record.needsClaimRecovery || _shouldRetryReadySetupCard(record),
       );
       return records;
     } finally {
@@ -564,11 +569,17 @@ class PaymentLinkClaimCoordinator {
           record.availability == PaymentLinkAvailability.checking ||
           record.availability == PaymentLinkAvailability.available);
 
-  bool _shouldRetryReadySetupClaim(PaymentLinkReceivedRecord record) {
-    if (!_isReadySetupClaim(record)) return false;
+  bool _shouldRetryReadySetupCard(PaymentLinkReceivedRecord record) {
+    if (record.status != PaymentLinkReceivedStatus.readyToClaim ||
+        record.setupAccountUuid == null) {
+      return false;
+    }
     final accounts = _ref.read(accountProvider).value?.accounts;
-    return accounts == null ||
-        accounts.any((account) => account.uuid == record.setupAccountUuid);
+    // A removed recipient may still own a Card whose file cleanup failed.
+    // Retry cleanup even for failed/archived Cards; never prepare them again.
+    return _isReadySetupClaim(record) ||
+        accounts == null ||
+        !accounts.any((account) => account.uuid == record.setupAccountUuid);
   }
 
   void _scheduleRetry() {

@@ -1156,7 +1156,9 @@ class PaymentLinkService
     if (persistedRecords.any(
       (record) =>
           record.network == endpoint.networkName &&
-          record.destinationAccountUuid != null,
+          (record.destinationAccountUuid != null ||
+              (record.status == PaymentLinkReceivedStatus.readyToClaim &&
+                  record.setupAccountUuid != null)),
     )) {
       // Account removal drains this coordinator before deleting wallet rows.
       // Once resumed, use the DB rather than a possibly stale UI account list

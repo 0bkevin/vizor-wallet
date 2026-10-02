@@ -161,6 +161,59 @@ void main() {
     expect(recoveryCalls, 2);
   });
 
+  for (final availability in [
+    PaymentLinkAvailability.checking,
+    PaymentLinkAvailability.failed,
+  ]) {
+    test(
+      'removed recipient cleanup retries without claiming a $availability Card',
+      () async {
+        var recoveryCalls = 0;
+        var prepareCalls = 0;
+        final cleaned = Completer<void>();
+        final container = ProviderContainer(
+          overrides: [
+            appSecurityProvider.overrideWith(_UnlockedSecurityNotifier.new),
+            accountProvider.overrideWith(
+              () => _SetupAccountNotifier(includeSetupAccount: false),
+            ),
+            paymentLinkClaimRecoveryRetryDelayProvider.overrideWithValue(
+              const Duration(milliseconds: 1),
+            ),
+            paymentLinkClaimRecoveryRunnerProvider.overrideWithValue(() async {
+              recoveryCalls++;
+              if (recoveryCalls == 1) {
+                // A failed file removal leaves the Card durable for retry.
+                return [
+                  _readySetupRecord.copyWith(
+                    availability: availability,
+                    archived: availability == PaymentLinkAvailability.failed,
+                  ),
+                ];
+              }
+              if (!cleaned.isCompleted) cleaned.complete();
+              return const [];
+            }),
+            paymentLinkSetupClaimPreparerProvider.overrideWithValue((
+              link, {
+              required destinationAccountUuid,
+            }) async {
+              prepareCalls++;
+              return _session(link.address);
+            }),
+          ],
+        );
+        addTearDown(container.dispose);
+        await container.read(accountProvider.future);
+        container.read(paymentLinkClaimCoordinatorProvider);
+        await cleaned.future.timeout(const Duration(seconds: 1));
+
+        expect(recoveryCalls, 2);
+        expect(prepareCalls, 0);
+      },
+    );
+  }
+
   test(
     'a ready setup Card automatically claims into its saved account',
     () async {
@@ -718,11 +771,16 @@ class _PasswordSetupSecurityNotifier extends AppSecurityNotifier {
 }
 
 class _SetupAccountNotifier extends AccountNotifier {
+  _SetupAccountNotifier({this.includeSetupAccount = true});
+
+  final bool includeSetupAccount;
+
   @override
-  AccountState build() => const AccountState(
+  AccountState build() => AccountState(
     accounts: [
-      AccountInfo(uuid: 'setup-account', name: 'Gift', order: 0),
-      AccountInfo(uuid: 'other-account', name: 'Other', order: 1),
+      if (includeSetupAccount)
+        const AccountInfo(uuid: 'setup-account', name: 'Gift', order: 0),
+      const AccountInfo(uuid: 'other-account', name: 'Other', order: 1),
     ],
     activeAccountUuid: 'other-account',
     activeAddress: 'u1otheraccount',

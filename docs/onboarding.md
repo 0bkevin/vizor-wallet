@@ -102,6 +102,10 @@ on Customise. Retrying does not create another account or prepare its credential
 again. An uncertain database result uses the existing reopen message and disables
 recreation.
 
+The recovery journal preserves whether the inspected creation date is provisional.
+After recovery, a later funding scan can still replace it with the transaction's
+block time; an already resolved date remains unchanged.
+
 The live flow retains the inspection/passcode through route refresh and clears
 them on completion or exit. They are not serialized into route restoration or
 browser history. Locking routes to unlock; the durable journal supports recovery.
@@ -147,8 +151,13 @@ journal cleanup.
   does not imply an on-chain receipt. Inspection/binding alone does not save a
   card, so setup must persist it before claim handoff.
 - Destructive operations drain accepted setup/claim work before deleting account
-  data. Successful claims clean up their temporary claim wallet and recovery
-  secrets after the existing six-scanned-confirmation condition.
+  data. After account removal, reconciliation forgets unclaimed setup cards bound
+  to that recipient and deletes their temporary claim wallets. It preserves cards
+  bound to other accounts and unbound cards. Cleanup failure retains the record
+  for retry; it never chooses a replacement recipient. Removing the final account
+  resets Vizor and clears the entire Received store. Successful claims clean up
+  their temporary claim wallet and recovery secrets after the existing
+  six-scanned-confirmation condition.
 
 ## Home, backup, and education
 

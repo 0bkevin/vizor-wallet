@@ -454,6 +454,7 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
         'giftLink': link.toRecoveryUri().toString(),
         'giftAddress': link.address,
         'giftCreatedAt': link.createdAt.toIso8601String(),
+        'giftIsCreatedAtProvisional': link.isCreatedAtProvisional,
       }),
     );
 
@@ -703,6 +704,7 @@ class AccountNotifier extends AsyncNotifier<AccountState> {
           .withResolvedMetadata(
             address: draft['giftAddress'] as String,
             createdAt: DateTime.parse(draft['giftCreatedAt'] as String),
+            isCreatedAtProvisional: draft['giftIsCreatedAtProvisional'] as bool,
           );
       final cards = ref.read(paymentLinkReceivedStoreProvider);
       final card = await cards.find(link.address);

@@ -30,6 +30,7 @@ String _pendingDraft() => jsonEncode({
   'giftLink': incomingLink.toRecoveryUri().toString(),
   'giftAddress': incomingLink.address,
   'giftCreatedAt': incomingLink.createdAt.toIso8601String(),
+  'giftIsCreatedAtProvisional': incomingLink.isCreatedAtProvisional,
 });
 
 final _rust = _GiftAccountRustApi();
@@ -243,18 +244,26 @@ void main() {
     expect(await store.readAccountMnemonic('uuid-1'), _mnemonic);
     expect(await pending(), isNull);
     expect(await store.readPlain(kGiftWalletSetupStartedStorageKey), isNull);
+    final card = (await cards.load()).single;
+    expect(card.createdAt, incomingLink.createdAt);
+    expect(card.isCreatedAtProvisional, isFalse);
   });
 
   test(
-    'an account JSON failure restores backup-required state after restart',
+    'an account JSON failure restores backup markers and the provisional card date after restart',
     () async {
+      final previewTime = DateTime.utc(2026, 9, 1);
+      final link = incomingLink.withResolvedMetadata(
+        createdAt: previewTime,
+        isCreatedAtProvisional: true,
+      );
       storage.failNextWriteFor('zcash_accounts');
 
       await expectLater(
         accounts().createGiftClaimAccount(
           name: _name,
           profilePictureId: _profile,
-          link: incomingLink,
+          link: link,
         ),
         throwsA(isA<GiftClaimAccountCreatedException>()),
       );
@@ -316,11 +325,24 @@ void main() {
       expect(saved.single['giftEducationPending'], isTrue);
       expect(saved.single['name'], _name);
       expect(saved.single['profilePictureId'], _profile);
-      expect(
-        (await cards.find(incomingLink.address))?.setupAccountUuid,
-        'uuid-1',
-      );
+      final recovered = (await cards.load()).single;
+      expect(recovered.setupAccountUuid, 'uuid-1');
+      expect(recovered.createdAt, previewTime);
+      expect(recovered.isCreatedAtProvisional, isTrue);
+      expect(recovered.claimLink!.isCreatedAtProvisional, isTrue);
       expect(await pending(), isNull);
+
+      // A later funding scan can replace the preview time after recovery.
+      final fundingTime = previewTime.add(const Duration(days: 1));
+      await cards.resolveProvisionalCreatedAt(
+        address: link.address,
+        createdAt: fundingTime,
+      );
+      final funded = (await cards.load()).single;
+      expect(funded.createdAt, fundingTime);
+      expect(funded.isCreatedAtProvisional, isFalse);
+      expect(funded.claimLink!.createdAt, fundingTime);
+      expect(funded.claimLink!.isCreatedAtProvisional, isFalse);
     },
   );
 

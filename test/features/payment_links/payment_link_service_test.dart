@@ -189,9 +189,15 @@ void main() {
         _PaymentLinkServiceReceivedStorage(),
       );
       final link = _link();
-      for (final entry in [('deleted', 'main'), ('existing', 'main')]) {
+      for (final entry in [
+        ('deleted', 'deleted', true),
+        ('existing', 'existing', true),
+        ('ready-deleted', 'deleted', false),
+        ('ready-existing', 'existing', false),
+        ('unbound', null, false),
+      ]) {
         final scoped = VizorPaymentLink(
-          network: entry.$2,
+          network: 'main',
           address: entry.$1,
           amountZatoshi: link.amountZatoshi,
           mnemonic: link.mnemonic,
@@ -199,14 +205,18 @@ void main() {
           label: link.label,
           createdAt: link.createdAt,
         );
-        await store.saveReady(scoped);
+        await store.saveReady(
+          scoped,
+          setupAccountUuid: entry.$3 ? null : entry.$2,
+        );
+        if (!entry.$3) continue;
         await store.markClaimStarted(
           address: scoped.address,
-          destinationAccountUuid: scoped.address,
+          destinationAccountUuid: entry.$2!,
         );
         await store.markReceiving(
           address: scoped.address,
-          destinationAccountUuid: scoped.address,
+          destinationAccountUuid: entry.$2!,
           claimTxids: 'claim-${scoped.address}',
         );
         await store.markReceived(address: scoped.address);
@@ -222,7 +232,7 @@ void main() {
           return true;
         },
       );
-      expect(onOtherNetwork, hasLength(2));
+      expect(onOtherNetwork, hasLength(5));
       expect(attempted, isEmpty);
       final eligible = await discardPaymentLinkClaimsForDeletedAccounts(
         records: await store.load(),
@@ -234,9 +244,14 @@ void main() {
           return false;
         },
       );
-      expect(eligible.map((r) => r.address), ['existing']);
-      expect(attempted, ['deleted']);
+      expect(eligible.map((r) => r.address), [
+        'existing',
+        'ready-existing',
+        'unbound',
+      ]);
+      expect(attempted, ['deleted', 'ready-deleted']);
       expect((await store.find('deleted'))!.needsClaimRecovery, isTrue);
+      expect(await store.find('ready-deleted'), isNotNull);
       await discardPaymentLinkClaimsForDeletedAccounts(
         records: await store.load(),
         network: 'main',
@@ -247,8 +262,17 @@ void main() {
           return true;
         },
       );
-      expect(attempted, ['deleted', 'deleted']);
-      expect((await store.load()).map((r) => r.address), ['existing']);
+      expect(attempted, [
+        'deleted',
+        'ready-deleted',
+        'deleted',
+        'ready-deleted',
+      ]);
+      expect((await store.load()).map((r) => r.address), [
+        'existing',
+        'ready-existing',
+        'unbound',
+      ]);
     },
   );
 
@@ -476,6 +500,32 @@ void main() {
           .setMockMethodCallHandler(pathChannel, null);
       await supportDirectory.delete(recursive: true);
     });
+
+    test(
+      'recovery removes a ready setup card and its wallet after recipient deletion',
+      () async {
+        api.poolFixture = true; // The wallet DB still contains another account.
+        final link = _link();
+        final store = container.read(paymentLinkReceivedStoreProvider);
+        await store.saveReady(link, setupAccountUuid: 'deleted-account');
+        final directory = Directory(
+          '${supportDirectory.path}/${paymentLinkClaimWalletDirectoryName(link)}',
+        );
+        await directory.create();
+        await File(
+          '${directory.path}/zcash_wallet.db',
+        ).writeAsString('claim DB');
+
+        final records = await container.read(
+          paymentLinkClaimRecoveryRunnerProvider,
+        )();
+
+        expect(records, isEmpty);
+        expect(await store.load(), isEmpty);
+        expect(await directory.exists(), isFalse);
+        expect(api.claimSyncCalls, 0);
+      },
+    );
 
     for (final address in ['u1legacy', 'u1current', 'u1legacy-projection']) {
       test('completed receipt $address survives secret cleanup', () async {
@@ -2392,6 +2442,7 @@ void main() {
       final container = ProviderContainer(
         overrides: [
           accountProvider.overrideWith(_HardwareAccountNotifier.new),
+          rpcEndpointProvider.overrideWith(_ClaimDestinationRpcNotifier.new),
           paymentLinkRecoveryStoreProvider.overrideWithValue(
             PaymentLinkRecoveryStore(storage),
           ),
@@ -2476,6 +2527,8 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         appSecurityProvider.overrideWith(_UnlockedSecurityNotifier.new),
+        accountProvider.overrideWith(_ClaimDestinationAccountNotifier.new),
+        rpcEndpointProvider.overrideWith(_ClaimDestinationRpcNotifier.new),
         paymentLinkClaimRecoveryRunnerProvider.overrideWithValue(
           () async => const [],
         ),

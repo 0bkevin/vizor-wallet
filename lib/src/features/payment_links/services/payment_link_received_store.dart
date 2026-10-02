@@ -152,8 +152,9 @@ class PaymentLinkReceivedRecord {
   /// Null means an older record has no baseline; [] is a known empty baseline.
   final List<String>? claimPriorTxids;
 
-  /// The wallet created to claim this Card, so an interrupted setup reopens
-  /// it. Unlike [destinationAccountUuid] it never scopes or prunes the Card.
+  /// The recipient chosen during Gift setup, so an interrupted setup reopens
+  /// the same account. Removing it also forgets an unclaimed setup Card.
+  /// [destinationAccountUuid] scopes submitted Cards in the Received list.
   final String? setupAccountUuid;
 
   bool get canArchive =>
