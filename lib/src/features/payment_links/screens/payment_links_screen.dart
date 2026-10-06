@@ -26,6 +26,7 @@ import '../../../providers/privacy_mode_provider.dart';
 import '../../../providers/rpc_endpoint_provider.dart';
 import '../../../providers/sync_provider.dart';
 import '../../../providers/zec_price_change_provider.dart';
+import '../../send/services/send_amount_conversion.dart';
 import '../../swap/models/swap_fiat_value_formatting.dart';
 import '../models/gift_card_usage.dart';
 import '../models/vizor_payment_link.dart';
@@ -51,6 +52,7 @@ import '../widgets/mobile/payment_link_mobile_views.dart';
 import '../widgets/mobile/payment_link_scan_sheet.dart';
 import '../widgets/mobile/payment_link_share_sheet.dart';
 import '../widgets/payment_link_archive_header.dart';
+import '../widgets/payment_link_amount_card.dart';
 import '../widgets/payment_link_card_flip.dart';
 import '../widgets/payment_link_batch_detail_desktop_view.dart';
 import '../widgets/payment_link_bulk_desktop_flow.dart';
@@ -139,6 +141,12 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
   @override
   final TextEditingController _amountController = TextEditingController();
   final FocusNode _amountFocusNode = FocusNode();
+  // The controller is only the visible input. Quotes, review and funding use
+  // the canonical zatoshi so toggling units cannot round the gift amount.
+  BigInt? _amountZatoshi;
+  PaymentLinkAmountCurrency _amountCurrency = PaymentLinkAmountCurrency.zec;
+  bool _amountUsesMax = false;
+  double? _amountUsdUnitPrice;
   @override
   final TextEditingController _messageController = TextEditingController();
   final FocusNode _messageFocusNode = FocusNode();
@@ -361,6 +369,9 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
       _showHelp = false;
       _longSyncLink = null;
     });
+    if (page == PaymentLinksLocalPage.amount) {
+      _refreshUsdAmountPrice(ref.read(zecLiveUsdUnitPriceProvider));
+    }
     if (page == PaymentLinksLocalPage.message &&
         kAppFormFactor == AppFormFactor.mobile) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -377,7 +388,7 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     _fundingQuoteDebounce?.cancel();
     _fundingQuoteGeneration++;
     _maxFundingQuoteGeneration++;
-    _amountController.clear();
+    _resetAmountInput();
     _messageController.clear();
     _clearPreparedBatch();
     setState(() {
@@ -401,6 +412,15 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
       _longSyncLink = null;
     });
     unawaited(_loadMaxFundingQuote());
+  }
+
+  @override
+  void _resetAmountInput() {
+    _amountController.clear();
+    _amountZatoshi = null;
+    _amountCurrency = PaymentLinkAmountCurrency.zec;
+    _amountUsesMax = false;
+    _amountUsdUnitPrice = null;
   }
 
   void _showHelpOverlay() => setState(() => _showHelp = true);
@@ -892,7 +912,7 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
   }
 
   bool get _hasPositiveAmount {
-    final amount = parseZecAmount(_amountController.text);
+    final amount = _amountZatoshi;
     return amount != null && amount > BigInt.zero;
   }
 
@@ -909,9 +929,106 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
 
   bool get _canContinueAmount =>
       _hasPositiveAmount &&
+      (_page != PaymentLinksLocalPage.amount ||
+          !_amountInputIsUsd ||
+          (ref.read(zecLiveUsdUnitPriceProvider) != null &&
+              (double.tryParse(_amountController.text) ?? 0) > 0)) &&
       !_fundingQuoteInProgress &&
       _fundingQuote != null &&
+      _fundingQuote!.recipientAmountZatoshi == _amountZatoshi &&
       _amountSupportingText == null;
+
+  bool get _amountInputIsUsd =>
+      _amountCurrency == PaymentLinkAmountCurrency.usd;
+
+  bool _canEnterUsd(double? price) =>
+      price != null &&
+      price.isFinite &&
+      price > 0 &&
+      (_amountZatoshi == null ||
+          _amountZatoshi! <= BigInt.zero ||
+          sendSendableUsdInputTextForZatoshi(
+            _amountZatoshi!,
+            price,
+          ).isNotEmpty);
+
+  bool get _usdPriceLoading =>
+      _page == PaymentLinksLocalPage.amount &&
+      ref.read(zecLiveUsdUnitPriceProvider) == null &&
+      ref.read(zecHomeMarketDataStateProvider).isLoading;
+
+  String? get _usdDisabledReason {
+    if (_page != PaymentLinksLocalPage.amount) return null;
+    if (ref.read(zecLiveUsdUnitPriceProvider) == null) {
+      return _usdPriceLoading ? 'Fetching USD price…' : 'USD price unavailable';
+    }
+    return 'Amount is too small for USD input.';
+  }
+
+  String? _amountConversionText(String? fiatText) {
+    if (_amountInputIsUsd) {
+      final amount = _amountZatoshi;
+      return amount == null ? null : '≈ ${formatZecAmount(amount)} ZEC';
+    }
+    return fiatText != null && fiatText.startsWith(r'$')
+        ? '≈ $fiatText'
+        : fiatText;
+  }
+
+  void _setAmountControllerText(String text) {
+    _amountController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  void _selectAmountCurrency(PaymentLinkAmountCurrency currency) {
+    if (currency == _amountCurrency) return;
+    final price = ref.read(zecLiveUsdUnitPriceProvider);
+    if (currency == PaymentLinkAmountCurrency.usd && !_canEnterUsd(price)) {
+      return;
+    }
+    final wasEditing = _amountFocusNode.hasFocus;
+    final amount = _amountZatoshi;
+    final text = amount == null
+        ? ''
+        : currency == PaymentLinkAmountCurrency.usd
+        ? sendUsdInputTextForZatoshi(amount, price!)
+        : formatZecAmount(amount);
+    setState(() {
+      _amountCurrency = currency;
+      _amountUsdUnitPrice = price;
+    });
+    _setAmountControllerText(text);
+    if (wasEditing) _amountFocusNode.requestFocus();
+  }
+
+  void _handleZecUsdPriceChanged(double? previous, double? next) {
+    if (previous == next) return;
+    _refreshUsdAmountPrice(next);
+  }
+
+  void _refreshUsdAmountPrice(double? price) {
+    // The ZEC amount is fixed after leaving Amount and is shown on Review.
+    // Returning to USD editing resumes conversion at the current live price.
+    if (_page != PaymentLinksLocalPage.amount ||
+        !_amountInputIsUsd ||
+        price == _amountUsdUnitPrice) {
+      return;
+    }
+    _amountUsdUnitPrice = price;
+    if (_amountUsesMax && _amountZatoshi != null) {
+      if (price != null) {
+        _setAmountControllerText(
+          sendUsdInputTextForZatoshi(_amountZatoshi!, price),
+        );
+      }
+      setState(() {});
+      return;
+    }
+    _amountZatoshi = sendZatoshiFromUsdText(_amountController.text, price);
+    _requoteAmount();
+  }
 
   @override
   bool _canEstimateCardFee(SyncState? sync, String accountUuid) {
@@ -964,7 +1081,7 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
         return;
       }
       if (shouldLoadMax) unawaited(_loadMaxFundingQuote());
-      if (shouldLoadAmount) _handleAmountChanged(_amountController.text);
+      if (shouldLoadAmount) _requoteAmount();
     });
   }
 
@@ -1008,9 +1125,18 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
   }
 
   void _handleAmountChanged(String value) {
+    _amountUsesMax = false;
+    _amountUsdUnitPrice = ref.read(zecLiveUsdUnitPriceProvider);
+    _amountZatoshi = _amountInputIsUsd
+        ? sendZatoshiFromUsdText(value, _amountUsdUnitPrice)
+        : parseZecAmount(value);
+    _requoteAmount();
+  }
+
+  void _requoteAmount() {
     _fundingQuoteDebounce?.cancel();
     final generation = ++_fundingQuoteGeneration;
-    final amount = parseZecAmount(value);
+    final amount = _amountZatoshi;
     setState(() {
       _fundingQuote = null;
       _fundingQuoteRequestedAccountUuid = null;
@@ -1110,7 +1236,8 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
       _page = PaymentLinksLocalPage.amount;
     });
     unawaited(_loadMaxFundingQuote());
-    _handleAmountChanged(_amountController.text);
+    _refreshUsdAmountPrice(ref.read(zecLiveUsdUnitPriceProvider));
+    _requoteAmount();
     if (wasPastAmountStep) {
       showAppToast(
         context,
@@ -1252,20 +1379,31 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     final accountUuid = ref.watch(accountProvider).value?.activeAccountUuid;
     final quote = _maxFundingQuote;
     if (quote == null || quote.sourceAccountUuid != accountUuid) return null;
-    return formatZecAmount(quote.recipientAmountZatoshi);
+    return _maxAmountTextFor(quote.recipientAmountZatoshi);
+  }
+
+  String? _maxAmountTextFor(BigInt amount) {
+    if (!_amountInputIsUsd) {
+      return formatZecAmount(amount);
+    }
+    final price = ref.read(zecLiveUsdUnitPriceProvider);
+    if (price == null) return null;
+    final text = sendSendableUsdInputTextForZatoshi(amount, price);
+    return text.isEmpty ? null : text;
   }
 
   void _useMaxAmount() {
     final accountUuid = ref.read(accountProvider).value?.activeAccountUuid;
     final quote = _maxFundingQuote;
     if (quote == null || quote.sourceAccountUuid != accountUuid) return;
-    final text = formatZecAmount(quote.recipientAmountZatoshi);
-    _amountController.value = TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: text.length),
-    );
+    final text = _maxAmountTextFor(quote.recipientAmountZatoshi);
+    if (text == null) return;
+    _amountZatoshi = quote.recipientAmountZatoshi;
+    _amountUsesMax = true;
+    _amountUsdUnitPrice = ref.read(zecLiveUsdUnitPriceProvider);
+    _setAmountControllerText(text);
     _amountFocusNode.requestFocus();
-    _handleAmountChanged(text);
+    _requoteAmount();
   }
 
   void _handleMessageChanged(String _) => setState(() {});
@@ -1333,11 +1471,14 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
       await _retryFundingMetadata();
       return;
     }
-    final amount = parseZecAmount(_amountController.text.trim());
+    final amount = _amountZatoshi;
     final quote = _fundingQuote;
     final accountState = ref.read(accountProvider).value;
     final activeAccountUuid = accountState?.activeAccountUuid;
-    if (amount == null || amount <= BigInt.zero || quote == null) {
+    if (amount == null ||
+        amount <= BigInt.zero ||
+        quote == null ||
+        quote.recipientAmountZatoshi != amount) {
       _showError('Enter a valid gift card amount.');
       return;
     }
@@ -2369,7 +2510,16 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     if (pendingLink != null) _schedulePendingPaymentLink();
 
     final pricingEnabled = ref.watch(swapFeatureEnabledProvider);
-    final amount = parseZecAmount(_amountController.text);
+    if (_page == PaymentLinksLocalPage.amount ||
+        _page == PaymentLinksLocalPage.message ||
+        _page == PaymentLinksLocalPage.review) {
+      ref.listen<double?>(
+        zecLiveUsdUnitPriceProvider,
+        _handleZecUsdPriceChanged,
+      );
+      ref.watch(zecLiveUsdUnitPriceProvider);
+    }
+    final amount = _amountZatoshi;
     // Keep the price subscription through amount edits and Review so clearing
     // the input does not restart the lookup or flash its loading state. The
     // group flow reads it for each card's fiat snapshot.
@@ -2484,7 +2634,7 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     }
 
     final currentPage = _buildCurrentPage(
-      amountFiatText: amountFiatSupportingText,
+      amountFiatText: amountFiatText,
       amountFiatLoading: amountFiatLoading,
     );
     final hardwareRequest = _hardwareFundingRequest;
@@ -3334,19 +3484,19 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     final maxAmountText = _maxAmountText;
     return PaymentLinkAmountDesktopView(
       state: _amountVisualState,
-      card: PaymentLinkGiftCard(
+      card: PaymentLinkAmountCard(
         artwork: _selectedArtwork,
         amountController: _amountController,
         amountFocusNode: _amountFocusNode,
-        amountEditorKey: const ValueKey('payment_link_amount_editor'),
-        amountInputFormatters: _amountFormatters,
+        currency: _amountCurrency,
+        onCurrencyChanged: _selectAmountCurrency,
+        usdEnabled: _canEnterUsd(ref.read(zecLiveUsdUnitPriceProvider)),
+        usdDisabledReason: _usdDisabledReason,
         onAmountChanged: _handleAmountChanged,
-        supportingText: fiatText,
-        supportingLoading: fiatLoading,
+        supportingText: _amountConversionText(fiatText),
+        supportingLoading: !_amountInputIsUsd && fiatLoading,
         maxAmountText: maxAmountText,
         onUseMax: maxAmountText == null ? null : _useMaxAmount,
-        showMaxButton: true,
-        semanticLabel: 'Gift card amount input',
       ),
       cardSelector: PaymentLinkCardSelectorRail(
         artworks: PaymentLinkCardArtwork.values,
@@ -3414,7 +3564,9 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     final message = _messageController.text.trim();
     final front = PaymentLinkGiftCard(
       artwork: _selectedArtwork,
-      amountText: _amountController.text,
+      amountText: _amountZatoshi == null
+          ? ''
+          : formatZecAmount(_amountZatoshi!),
       supportingText: fiatText,
       supportingLoading: fiatLoading,
       showCaret: false,

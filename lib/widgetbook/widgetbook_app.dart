@@ -26,6 +26,7 @@ import 'payment_request_use_cases.dart';
 import 'request_amount_use_cases.dart';
 import 'pay_use_cases.dart';
 import 'payment_link_mobile_use_cases.dart';
+import 'payment_link_amount_currency_use_cases.dart';
 import 'payment_link_claim_outcome_use_cases.dart';
 import 'payment_link_use_cases.dart';
 import 'receive_use_cases.dart';
@@ -1443,6 +1444,18 @@ class WidgetbookApp extends StatelessWidget {
                     WidgetbookUseCase(
                       name: 'ZEC amount',
                       builder: buildPaymentLinkCreateAmountUseCase,
+                    ),
+                    WidgetbookUseCase(
+                      name: 'USD amount',
+                      builder: buildGiftCardUsdAmountUseCase,
+                    ),
+                    WidgetbookUseCase(
+                      name: 'USD price loading',
+                      builder: buildGiftCardAmountPriceLoadingUseCase,
+                    ),
+                    WidgetbookUseCase(
+                      name: 'USD price unavailable',
+                      builder: buildGiftCardAmountPriceUnavailableUseCase,
                     ),
                     WidgetbookUseCase(
                       name: 'Waiting for sync',
