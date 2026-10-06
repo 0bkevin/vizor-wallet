@@ -96,7 +96,7 @@ void main() {
     );
     expect(
       tester.getTopLeft(find.byType(ReceiveAddressInfoSheet)),
-      const Offset(16, 366),
+      const Offset(16, 382),
     );
     final firstItem = find.byKey(const ValueKey('receive_address_info_item_0'));
     final secondItem = find.byKey(
@@ -141,14 +141,18 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Transparent address'), findsOneWidget);
     expect(find.text('Publicly visible'), findsOneWidget);
+    expect(
+      find.textContaining('next transparent address will automatically change'),
+      findsOneWidget,
+    );
     expect(find.text('Close'), findsOneWidget);
     expect(
       tester.getSize(find.byType(ReceiveAddressInfoSheet)),
-      const Size(361, 479),
+      const Size(361, 612),
     );
     expect(
       tester.getTopLeft(find.byType(ReceiveAddressInfoSheet)),
-      const Offset(16, 341),
+      const Offset(16, 224),
     );
   });
 }
