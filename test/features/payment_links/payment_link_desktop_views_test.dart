@@ -1534,11 +1534,19 @@ void main() {
     expect(tester.getTopLeft(find.text('Redeem the Card')).dy, closeTo(166, 1));
     expect(tester.getTopLeft(redeemDropZone), const Offset(492, 251));
     expect(tester.getSize(redeemDropZone), const Size(360, 225));
+    final pasteButton = find.byKey(
+      const ValueKey('payment_link_redeem_paste_button'),
+    );
+    final scanButton = find.byKey(
+      const ValueKey('payment_link_desktop_scan_button'),
+    );
     expect(
-      tester.getCenter(
-        find.byKey(const ValueKey('payment_link_redeem_paste_button')),
-      ),
+      (tester.getCenter(pasteButton) + tester.getCenter(scanButton)) / 2,
       tester.getCenter(redeemDropZone),
+    );
+    expect(
+      tester.getTopLeft(scanButton).dy - tester.getBottomLeft(pasteButton).dy,
+      AppSpacing.s,
     );
     expect(
       tester

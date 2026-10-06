@@ -2575,6 +2575,8 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
               state: _redeemState,
               onBack: () => _showPage(PaymentLinksLocalPage.home),
               onPaste: _operationInProgress ? null : _runRedeemAction,
+              onScan: _scanPaymentLink,
+              scanEnabled: !_operationInProgress,
               onClearClipboard: _operationInProgress ? null : _clearClipboard,
               pasteLabel: _redeemActionLabel,
             ),
