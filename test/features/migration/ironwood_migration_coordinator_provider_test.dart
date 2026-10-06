@@ -2322,7 +2322,8 @@ ProviderContainer _container({
   AppSecurityState? initialSecurityState,
   IronwoodMigrationStopper? stopMigrationRun,
 }) {
-  final service = IronwoodMigrationService(
+  final service = _CoordinatorTestMigrationService(
+    usesNativeOutbox: usesNativeOutbox,
     getWalletDbPath: () async => '/tmp/wallet.db',
     getStatus:
         ({required dbPath, required network, required accountUuid}) async {
@@ -2597,4 +2598,35 @@ rust_sync.IronwoodMigrationResult _result(String status) {
     feeZatoshi: BigInt.zero,
     migratedZatoshi: BigInt.from(100000000),
   );
+}
+
+// Coordinator tests choose the recovery capability independently of the host
+// OS. The service suite covers the production iOS/Android capability gates.
+class _CoordinatorTestMigrationService extends IronwoodMigrationService {
+  _CoordinatorTestMigrationService({
+    required this.usesNativeOutbox,
+    required super.getWalletDbPath,
+    required super.getStatus,
+    super.getStatuses,
+    required super.getPrivatePlan,
+    required super.secureStore,
+    super.getEndpoint,
+    super.getSessionPassword,
+    super.isMacOS,
+    super.isMobile,
+    super.isIOS,
+    super.supportsBackgroundMigration,
+    super.isHardwareAccount,
+    super.backgroundCredentialStore,
+    super.startBackgroundPreparation,
+    super.recordVerifiedProofReadiness,
+    super.scheduleBackgroundMigration,
+    super.recoverDueMigrationOutbox,
+    super.broadcastDueMigration,
+    super.startMacosSoftwareMigration,
+    super.stopMigrationRun,
+  });
+  final bool usesNativeOutbox;
+  @override
+  bool get supportsBackgroundMigrationRetry => isMobile() && usesNativeOutbox;
 }
