@@ -101,26 +101,31 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     id: 'gift-card-amount-zec',
     description: 'Gift card amount in ZEC with its USD estimate',
     builder: buildGiftCardZecAmountUseCase,
+    mobile: true,
   ),
   FigmaCompareScenario(
     id: 'gift-card-amount-usd',
     description: 'Gift card amount in USD with its canonical ZEC value',
     builder: buildGiftCardUsdAmountUseCase,
+    mobile: true,
   ),
   FigmaCompareScenario(
     id: 'gift-card-amount-empty',
     description: 'Gift card input unit selector before entering an amount',
     builder: buildGiftCardEmptyAmountUseCase,
+    mobile: true,
   ),
   FigmaCompareScenario(
     id: 'gift-card-amount-price-loading',
     description: 'ZEC entry with a pending USD price and disabled USD selector',
     builder: buildGiftCardAmountPriceLoadingUseCase,
+    mobile: true,
   ),
   FigmaCompareScenario(
     id: 'gift-card-amount-price-unavailable',
     description: 'ZEC entry remains available without a live USD price',
     builder: buildGiftCardAmountPriceUnavailableUseCase,
+    mobile: true,
   ),
   FigmaCompareScenario(
     id: 'gift-card-value',

@@ -19,8 +19,6 @@ import '../../../core/privacy/privacy_mask.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_icon.dart';
 import '../../../core/widgets/app_toast.dart';
-import '../../../core/widgets/comma_to_dot_input_formatter.dart';
-import '../../../core/widgets/decimal_amount_input_formatter.dart';
 import '../../../providers/account_provider.dart';
 import '../../../providers/privacy_mode_provider.dart';
 import '../../../providers/rpc_endpoint_provider.dart';
@@ -132,11 +130,6 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
     return 'Wait $minutes:$seconds to claim';
   }
-
-  static const _amountFormatters = [
-    CommaToDotInputFormatter(),
-    DecimalAmountInputFormatter(maxFractionDigits: 8),
-  ];
 
   @override
   final TextEditingController _amountController = TextEditingController();
@@ -2517,8 +2510,13 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
         zecLiveUsdUnitPriceProvider,
         _handleZecUsdPriceChanged,
       );
-      ref.watch(zecLiveUsdUnitPriceProvider);
     }
+    final livePrice =
+        (_page == PaymentLinksLocalPage.amount ||
+            _page == PaymentLinksLocalPage.message ||
+            _page == PaymentLinksLocalPage.review)
+        ? ref.watch(zecLiveUsdUnitPriceProvider)
+        : null;
     final amount = _amountZatoshi;
     // Keep the price subscription through amount edits and Review so clearing
     // the input does not restart the lookup or flash its loading state. The
@@ -2545,12 +2543,6 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
         amount != null &&
         amount > BigInt.zero &&
         (marketData?.isLoading ?? false);
-    final amountFiatSupportingText =
-        amountFiatText ??
-        (pricingEnabled && amount != null && !amountFiatLoading
-            ? 'Fiat unavailable'
-            : null);
-
     if (kAppFormFactor == AppFormFactor.mobile) {
       final mobileHardwareRequest = _hardwareFundingRequest;
       return PaymentLinksMobileBody(
@@ -2575,8 +2567,13 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
         selectedArtwork: _selectedArtwork,
         amountController: _amountController,
         amountFocusNode: _amountFocusNode,
-        amountInputFormatters: _amountFormatters,
-        amountFiatText: amountFiatSupportingText,
+        amountCurrency: _amountCurrency,
+        onAmountCurrencyChanged: _selectAmountCurrency,
+        usdEnabled: _canEnterUsd(livePrice),
+        usdDisabledReason: _usdDisabledReason,
+        amountZecText: amount == null ? '' : formatZecAmount(amount),
+        amountConversionText: _amountConversionText(amountFiatText),
+        amountFiatText: amountFiatText,
         amountFiatLoading: amountFiatLoading,
         maxAmountText: _maxAmountText,
         canContinueAmount: _canContinueAmount,

@@ -1319,6 +1319,10 @@ class WidgetbookApp extends StatelessWidget {
                       builder: buildMobilePaymentLinkAmountFilledUseCase,
                     ),
                     WidgetbookUseCase(
+                      name: 'Amount - USD input',
+                      builder: buildGiftCardUsdAmountUseCase,
+                    ),
+                    WidgetbookUseCase(
                       name: 'Amount - Focused',
                       builder: buildMobilePaymentLinkAmountFocusedUseCase,
                     ),
