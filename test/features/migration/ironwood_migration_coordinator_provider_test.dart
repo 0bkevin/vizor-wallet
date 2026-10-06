@@ -1424,6 +1424,20 @@ void main() {
         .read(ironwoodMigrationCoordinatorProvider.notifier)
         .refreshNow();
 
+    expect(recoveries, [_softwareUuid]);
+    expect(
+      container
+          .read(ironwoodMigrationCoordinatorProvider)
+          .errors[_softwareUuid],
+      contains('not available in the background outbox'),
+    );
+    final coordinator = container.read(
+      ironwoodMigrationCoordinatorProvider.notifier,
+    );
+    await expectLater(
+      coordinator.retry(_softwareUuid, status: statuses[_softwareUuid]),
+      throwsA(isA<StateError>()),
+    );
     expect(recoveries, [_softwareUuid, _softwareUuid]);
     expect(
       container
@@ -1431,7 +1445,76 @@ void main() {
           .errors[_softwareUuid],
       contains('not available in the background outbox'),
     );
+    statuses[_softwareUuid] = _status('waiting_migration_confirmations');
+    await coordinator.refreshNow();
+    expect(
+      container
+          .read(ironwoodMigrationCoordinatorProvider)
+          .errors[_softwareUuid],
+      isNull,
+    );
   });
+
+  test(
+    'successful manual recovery clears a cached terminal outbox error',
+    () async {
+      final statuses = {
+        _softwareUuid: _status('broadcast_scheduled', scheduledHeight: 1_000),
+        _hardwareUuid: _status('complete', activeRunId: null),
+      };
+      final recoveries = <String>[];
+      final container = _container(
+        statuses: statuses,
+        softwareStarts: [],
+        broadcasts: [],
+        // Keep the same batch due after the service-level continuation. A
+        // confirmation transition would clear the cache and hide this bug.
+        broadcast: (_) async => _result('broadcast_scheduled'),
+        outboxRecoveries: recoveries,
+        recoverOutbox: (_) async => recoveries.length == 1
+            ? const IronwoodMigrationOutboxRunResult(
+                outcome: IronwoodMigrationOutboxRunOutcome.noWork,
+                observedHeight: 1_000,
+              )
+            : const IronwoodMigrationOutboxRunResult(
+                outcome: IronwoodMigrationOutboxRunOutcome.waiting,
+                accountUuid: _softwareUuid,
+                observedHeight: 1_000,
+                nextHeight: 1_001,
+              ),
+        syncState: SyncState(scannedHeight: 1_000, chainTipHeight: 1_000),
+      );
+      addTearDown(container.dispose);
+      final subscription = container.listen(
+        ironwoodMigrationCoordinatorProvider,
+        (_, _) {},
+        fireImmediately: true,
+      );
+      addTearDown(subscription.close);
+      await container.read(syncProvider.future);
+      final coordinator = container.read(
+        ironwoodMigrationCoordinatorProvider.notifier,
+      );
+      await coordinator.refreshNow();
+      expect(
+        container
+            .read(ironwoodMigrationCoordinatorProvider)
+            .errors[_softwareUuid],
+        contains('not available in the background outbox'),
+      );
+
+      await coordinator.retry(_softwareUuid, status: statuses[_softwareUuid]);
+      await coordinator.refreshNow();
+
+      expect(recoveries, [_softwareUuid, _softwareUuid]);
+      expect(
+        container
+            .read(ironwoodMigrationCoordinatorProvider)
+            .errors[_softwareUuid],
+        isNull,
+      );
+    },
+  );
 
   test('one account failure does not block another account recovery', () async {
     final statuses = {

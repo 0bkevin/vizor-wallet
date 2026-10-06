@@ -257,7 +257,10 @@ class IronwoodMigrationCoordinator
   bool _hasObservedInitialAccountList = false;
   Future<void>? _backgroundPreparationRecovery;
   final Map<String, DateTime> _lastAdvanceAt = {};
-  final Map<String, ({String progressKey, DateTime retryAt})>
+  final Map<
+    String,
+    ({String progressKey, DateTime retryAt, String? terminalError})
+  >
   _outboxRecoveryWindows = {};
   final Map<String, String> _lastAdvanceProgressKeys = {};
   final Map<String, Future<void>> _advanceOperations = {};
@@ -528,6 +531,7 @@ class IronwoodMigrationCoordinator
       if (statusForAdvance != null &&
           service.supportsBackgroundMigrationRetry &&
           _manualRetryNeedsOutboxRecovery(statusForAdvance)) {
+        _outboxRecoveryWindows.remove(accountUuid);
         final recovery = await service.recoverDueMigrationOutbox(
           network: ref.read(rpcEndpointFailoverProvider).current.networkName,
           accountUuid: accountUuid,
@@ -536,9 +540,12 @@ class IronwoodMigrationCoordinator
           network: ref.read(rpcEndpointFailoverProvider).current.networkName,
           accountUuid: accountUuid,
         );
-        if (_manualRetryNeedsOutboxRecovery(refreshedStatus)) {
-          _validateDueOutboxRecovery(recovery, accountUuid: accountUuid);
-        }
+        _recordDueOutboxRecovery(
+          recovery,
+          accountUuid: accountUuid,
+          status: refreshedStatus,
+          stillDue: _manualRetryNeedsOutboxRecovery(refreshedStatus),
+        );
         if (!ref.mounted) return;
         state = state.copyWith(
           errors: Map<String, String>.from(state.errors)..remove(accountUuid),
@@ -971,11 +978,17 @@ class IronwoodMigrationCoordinator
         nextStatuses[account.uuid] = status;
         nextErrors.remove(account.uuid);
 
-        if (_shouldRecoverDueNativeOutbox(
+        final shouldRecoverOutbox = _shouldRecoverDueNativeOutbox(
           status,
           usesNativeOutbox: service.supportsBackgroundMigrationRetry,
           accountUuid: account.uuid,
-        )) {
+        );
+        final recoveryWindow = _outboxRecoveryWindows[account.uuid];
+        if (!shouldRecoverOutbox && recoveryWindow?.terminalError != null) {
+          nextErrors[account.uuid] = recoveryWindow!.terminalError!;
+        }
+        if (shouldRecoverOutbox) {
+          _outboxRecoveryWindows.remove(account.uuid);
           final recovery = await service.recoverDueMigrationOutbox(
             network: endpoint.networkName,
             accountUuid: account.uuid,
@@ -991,31 +1004,12 @@ class IronwoodMigrationCoordinator
             status,
             currentHeight: _safelyObservedProofHeight(),
           );
-          if (stillDue) {
-            try {
-              _validateDueOutboxRecovery(recovery, accountUuid: account.uuid);
-            } on StateError {
-              // Surfacing a terminal outcome without a backoff window would
-              // let the five-second poll re-run the same recovery and re-raise
-              // this error every cycle, pinning the screen on it.
-              _outboxRecoveryWindows[account.uuid] = (
-                progressKey: _outboxRecoveryProgressKey(status),
-                retryAt: DateTime.now().add(_outboxRecoveryDelay(recovery)),
-              );
-              rethrow;
-            }
-          }
-          if (!stillDue ||
-              _outboxRecoveryCanWait(recovery, accountUuid: account.uuid)) {
-            if (stillDue) {
-              _outboxRecoveryWindows[account.uuid] = (
-                progressKey: _outboxRecoveryProgressKey(status),
-                retryAt: DateTime.now().add(_outboxRecoveryDelay(recovery)),
-              );
-            } else {
-              _outboxRecoveryWindows.remove(account.uuid);
-            }
-          }
+          _recordDueOutboxRecovery(
+            recovery,
+            accountUuid: account.uuid,
+            status: status,
+            stillDue: stillDue,
+          );
         }
 
         if (_shouldAdvance(
@@ -1183,6 +1177,36 @@ class IronwoodMigrationCoordinator
           broadcast.status.toLowerCase() == 'scheduled' &&
           broadcast.txidHex.isNotEmpty,
     );
+  }
+
+  /// Keeps recovery errors visible through the cooldown for the same batch.
+  /// A manual retry also replaces that batch's cooldown with its new outcome.
+  void _recordDueOutboxRecovery(
+    IronwoodMigrationOutboxRunResult result, {
+    required String accountUuid,
+    required rust_sync.MigrationStatus status,
+    required bool stillDue,
+  }) {
+    if (!stillDue) return;
+    try {
+      _validateDueOutboxRecovery(result, accountUuid: accountUuid);
+    } on StateError catch (error) {
+      // Polling must preserve the actionable error without submitting the
+      // same failed recovery again before its retry window opens.
+      _outboxRecoveryWindows[accountUuid] = (
+        progressKey: _outboxRecoveryProgressKey(status),
+        retryAt: DateTime.now().add(_outboxRecoveryDelay(result)),
+        terminalError: error.toString(),
+      );
+      rethrow;
+    }
+    if (_outboxRecoveryCanWait(result, accountUuid: accountUuid)) {
+      _outboxRecoveryWindows[accountUuid] = (
+        progressKey: _outboxRecoveryProgressKey(status),
+        retryAt: DateTime.now().add(_outboxRecoveryDelay(result)),
+        terminalError: null,
+      );
+    }
   }
 
   void _validateDueOutboxRecovery(
