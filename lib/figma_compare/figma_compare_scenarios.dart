@@ -1,3 +1,4 @@
+import 'desktop_welcome_capture.dart';
 import 'desktop_onboarding_selection_capture.dart';
 import 'mobile_welcome_capture.dart';
 import '../src/features/payment_links/widgets/payment_link_gift_card.dart';
@@ -96,6 +97,18 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     builder: buildMobileGiftOnboardingFundingFound,
     desktop: false,
     mobile: true,
+  ),
+  FigmaCompareScenario(
+    id: 'desktop-onboarding-welcome',
+    description: 'Desktop initial Welcome with deterministic video poster',
+    builder: buildDesktopWelcomeCapture,
+    renderShadows: true,
+  ),
+  FigmaCompareScenario(
+    id: 'desktop-onboarding-add-account-welcome',
+    description: 'Desktop additional-account Welcome with deterministic poster',
+    builder: buildDesktopAddAccountWelcomeCapture,
+    renderShadows: true,
   ),
   FigmaCompareScenario(
     id: 'desktop-onboarding-import',
