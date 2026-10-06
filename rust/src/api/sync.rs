@@ -2576,6 +2576,14 @@ pub struct TransactionInfo {
     pub tx_kind: String,
     pub display_amount: u64,
     pub display_pool: String,
+    /// Exact output pool for ordinary Activity labels. The legacy display pool
+    /// remains available for Gift Cards; shielding and migration leave this unset.
+    pub activity_pool: Option<String>,
+    /// Hidden TEX funding step matched by the existing history classifier.
+    pub funding_parent_txid: Option<String>,
+    /// Zero means unmined; absent means no matched funding dependency.
+    pub funding_parent_mined_height: Option<u64>,
+    pub funding_parent_expired: Option<bool>,
     pub created_time: u64,
 }
 
@@ -2618,6 +2626,10 @@ pub fn get_transaction_history(
                 tx_kind: t.tx_kind,
                 display_amount: t.display_amount,
                 display_pool: t.display_pool,
+                activity_pool: t.activity_pool,
+                funding_parent_txid: t.funding_parent_txid,
+                funding_parent_mined_height: t.funding_parent_mined_height,
+                funding_parent_expired: t.funding_parent_expired,
                 created_time: t.created_time,
             })
             .collect())

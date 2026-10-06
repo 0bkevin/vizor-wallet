@@ -43,6 +43,7 @@ import 'package:zcash_wallet/src/providers/privacy_mode_provider.dart';
 import 'package:zcash_wallet/src/providers/sync_failure.dart';
 import 'package:zcash_wallet/src/providers/sync_keep_awake_provider.dart';
 import 'package:zcash_wallet/src/providers/sync_provider.dart';
+import 'package:zcash_wallet/src/features/activity/activity_eta_provider.dart';
 import 'package:zcash_wallet/src/providers/zec_price_change_provider.dart';
 import 'package:zcash_wallet/src/rust/api/sync.dart' as rust_sync;
 
@@ -212,6 +213,7 @@ class _HomeParticipationRecorder extends VotingParticipationCoordinator {
 
 Widget _app(
   SyncState syncState, {
+  Map<String, String>? etaLabels,
   ZecMarketData? marketData = const ZecMarketData(
     usdPrice: 70,
     change24hPct: 13.12,
@@ -331,6 +333,8 @@ Widget _app(
 
   return ProviderScope(
     overrides: [
+      if (etaLabels != null)
+        activityEtaLabelsProvider.overrideWithValue(etaLabels),
       if (participationGuards != null)
         votingParticipationProvider.overrideWith(
           (ref) => _HomeParticipationRecorder(ref, participationGuards),
@@ -663,6 +667,42 @@ class _DeferredVotingStore implements VotingHomeCacheStore {
 }
 
 void main() {
+  testWidgets('Home displays ETA in place of the pool subtitle', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(393, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final pending = rust_sync.TransactionInfo(
+      txidHex: 'pending-receive',
+      minedHeight: BigInt.zero,
+      expiredUnmined: false,
+      accountBalanceDelta: 100000000,
+      fee: BigInt.zero,
+      blockTime: BigInt.zero,
+      isTransparent: false,
+      txKind: 'receiving',
+      displayAmount: BigInt.from(100000000),
+      displayPool: 'shielded',
+      createdTime: BigInt.zero,
+    );
+    await tester.pumpWidget(
+      _app(
+        _syncedState(
+          orchardBalance: BigInt.from(100000000),
+        ).copyWith(recentTransactions: [pending]),
+        showVoting: false,
+        etaLabels: const {'pending-receive': 'Est. 1–3 min'},
+      ),
+    );
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('Receiving...'), findsOneWidget);
+    expect(find.text('Est. 1–3 min'), findsOneWidget);
+    expect(find.text('Shielded'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Home offers only pending backup and opens its account route', (
     tester,
   ) async {
@@ -2888,7 +2928,7 @@ void main() {
       for (final row in [placeholder, actualUnmined, actualMined]) {
         expect(row.row.stableId, 'gift-card:home-continuity-card');
         expect(row.row.timestampText, isNot('--'));
-        expect(row.row.subtitle, 'Ironwood');
+        expect(row.row.subtitle, 'Checking status');
         expect(row.row.amountText, '+4.45 ZEC');
       }
       expect(actualUnmined.row.timestampText, placeholder.row.timestampText);

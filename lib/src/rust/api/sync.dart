@@ -2815,6 +2815,17 @@ class TransactionInfo {
   final String txKind;
   final BigInt displayAmount;
   final String displayPool;
+
+  /// Exact output pool for ordinary Activity labels. The legacy display pool
+  /// remains available for Gift Cards; shielding and migration leave this unset.
+  final String? activityPool;
+
+  /// Hidden TEX funding step matched by the existing history classifier.
+  final String? fundingParentTxid;
+
+  /// Zero means unmined; absent means no matched funding dependency.
+  final BigInt? fundingParentMinedHeight;
+  final bool? fundingParentExpired;
   final BigInt createdTime;
 
   const TransactionInfo({
@@ -2828,6 +2839,10 @@ class TransactionInfo {
     required this.txKind,
     required this.displayAmount,
     required this.displayPool,
+    this.activityPool,
+    this.fundingParentTxid,
+    this.fundingParentMinedHeight,
+    this.fundingParentExpired,
     required this.createdTime,
   });
 
@@ -2843,6 +2858,10 @@ class TransactionInfo {
       txKind.hashCode ^
       displayAmount.hashCode ^
       displayPool.hashCode ^
+      activityPool.hashCode ^
+      fundingParentTxid.hashCode ^
+      fundingParentMinedHeight.hashCode ^
+      fundingParentExpired.hashCode ^
       createdTime.hashCode;
 
   @override
@@ -2860,6 +2879,10 @@ class TransactionInfo {
           txKind == other.txKind &&
           displayAmount == other.displayAmount &&
           displayPool == other.displayPool &&
+          activityPool == other.activityPool &&
+          fundingParentTxid == other.fundingParentTxid &&
+          fundingParentMinedHeight == other.fundingParentMinedHeight &&
+          fundingParentExpired == other.fundingParentExpired &&
           createdTime == other.createdTime;
 }
 

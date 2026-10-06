@@ -39,6 +39,7 @@ import 'package:zcash_wallet/src/providers/zec_price_change_provider.dart';
 import 'package:zcash_wallet/src/providers/sync_failure.dart';
 import 'package:zcash_wallet/src/providers/network_privacy_provider.dart';
 import 'package:zcash_wallet/src/providers/sync_provider.dart';
+import 'package:zcash_wallet/src/features/activity/activity_eta_provider.dart';
 
 import '../../fakes/fake_sync_notifier.dart';
 import '../../support/wallet_path_read_blocker.dart';
@@ -928,6 +929,27 @@ void main() {
     expect(find.byType(ActivityScreen), findsOneWidget);
   });
 
+  testWidgets('Home shows ETA in place of the compact pending pool', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _appHarness(
+        '/home',
+        swapEnabled: false,
+        etaLabels: const {'pending-receive': 'Est. 1–3 min'},
+        syncState: SyncState(
+          accountUuid: 'account-1',
+          hasAccountScopedData: true,
+          recentTransactions: [_pendingReceivingTx(txidHex: 'pending-receive')],
+        ),
+      ),
+    );
+    await _pumpUntilPresent(tester, find.text('Receiving ...'));
+    expect(find.text('Est. 1–3 min'), findsOneWidget);
+    expect(find.text('Shielded'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('home activity opens before receipt loading completes', (
     tester,
   ) async {
@@ -1531,6 +1553,7 @@ rust_sync.MigrationStatus _migrationStatus(
 
 Widget _appHarness(
   String initialLocation, {
+  Map<String, String>? etaLabels,
   GoRouter? router,
   bool? swapEnabled,
   bool privacyModeEnabled = false,
@@ -1554,6 +1577,8 @@ Widget _appHarness(
 }) {
   return ProviderScope(
     overrides: [
+      if (etaLabels != null)
+        activityEtaLabelsProvider.overrideWithValue(etaLabels),
       if (networkPrivacy != null)
         networkPrivacyProvider.overrideWith(() => networkPrivacy),
       zecMarketDataSourceProvider.overrideWithValue(

@@ -31,10 +31,12 @@ import '../../../providers/privacy_mode_provider.dart';
 import '../../../providers/sync_display_progress_provider.dart';
 import '../../../providers/network_privacy_provider.dart';
 import '../../../providers/sync_provider.dart';
+import '../../../providers/pending_activity_evidence_provider.dart';
 import '../../../providers/wallet_provider.dart';
 import '../../../rust/api/sync.dart' as rust_sync;
 import '../../activity/activity_feed_sections.dart';
 import '../../activity/gift_card_activity_index.dart';
+import '../../activity/activity_eta_provider.dart';
 import '../../activity/activity_row_mapper.dart';
 import '../../activity/models/activity_row_data.dart';
 import '../../activity/screens/activity_transaction_status_screen.dart';
@@ -753,6 +755,16 @@ class _HomePaneState extends ConsumerState<_HomePane> {
       row: buildTransactionActivityRow(
         context: context,
         transaction: transaction,
+        showPendingEstimate: !ref
+            .watch(activityEtaExcludedTxidsProvider)
+            .contains(activityTxidKey(transaction.txidHex)),
+        pendingLabel:
+            activityEtaLabelFor(
+              transaction: transaction,
+              labels: ref.watch(activityEtaLabelsProvider),
+              giftCard: giftCard,
+            ) ??
+            ref.watch(activityPendingFallbackLabelProvider),
         giftCardKind: giftCard?.kind,
         giftCardAmountZatoshi: giftCard?.amountZatoshi,
         giftCardBatchCount: giftCard?.batchCount,

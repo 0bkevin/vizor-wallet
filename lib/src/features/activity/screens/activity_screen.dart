@@ -17,9 +17,11 @@ import '../../../providers/account_provider.dart';
 import '../../../providers/privacy_mode_provider.dart';
 import '../../../providers/rpc_endpoint_provider.dart';
 import '../../../providers/sync_provider.dart';
+import '../../../providers/pending_activity_evidence_provider.dart';
 import '../../../rust/api/sync.dart' as rust_sync;
 import '../../swap/models/swap_activity_navigation.dart';
 import '../../swap/providers/swap_activity_tracker.dart';
+import '../activity_eta_provider.dart';
 import '../activity_row_mapper.dart';
 import '../gift_card_activity_index.dart';
 import '../models/activity_row_data.dart';
@@ -45,6 +47,8 @@ class ActivityScreen extends ConsumerStatefulWidget {
 class _ActivityScreenState extends ConsumerState<ActivityScreen> {
   List<rust_sync.TransactionInfo>? _transactions;
   String? _transactionsAccountUuid;
+  (int?, int?, DateTime?)? _transactionsSnapshot;
+  bool _hasFreshTransactionHistory = false;
   bool _isLoading = true;
   String? _error;
   String? _activeAccountUuid;
@@ -90,12 +94,20 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     bool clearExisting = false,
   }) async {
     final accountUuid = ref.read(accountProvider).value?.activeAccountUuid;
+    final historySnapshot = activityHistorySnapshot(
+      ref.read(syncProvider).value,
+    );
     final generation = ++_transactionLoadGeneration;
     _pendingTransactionRefresh = false;
     _activeAccountUuid = accountUuid;
 
-    if ((showLoading || clearExisting) && mounted) {
+    if (mounted) {
       setState(() {
+        _hasFreshTransactionHistory =
+            _hasFreshTransactionHistory &&
+            _transactionsAccountUuid == accountUuid &&
+            _transactionsSnapshot == historySnapshot &&
+            !showLoading;
         if (showLoading) {
           _isLoading = true;
           _error = null;
@@ -125,6 +137,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
       }
       setState(() {
         _transactions = txs;
+        _transactionsSnapshot = historySnapshot;
+        _hasFreshTransactionHistory = true;
         _transactionsAccountUuid = accountUuid;
         _isLoading = false;
         _error = null;
@@ -137,9 +151,14 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
       }
       final hasExistingTransactions =
           _transactionsAccountUuid == accountUuid && _transactions != null;
-      if (hasExistingTransactions && !clearExisting) return;
+      if (hasExistingTransactions && !clearExisting) {
+        setState(() => _hasFreshTransactionHistory = false);
+        _runPendingTransactionRefreshIfNeeded(generation, accountUuid);
+        return;
+      }
       setState(() {
         _transactionsAccountUuid = accountUuid;
+        _hasFreshTransactionHistory = false;
         _error = 'Activity could not be loaded.';
         _isLoading = false;
       });
@@ -255,13 +274,10 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
   }
 
   String _recentSignature(SyncState? sync) {
-    return sync?.recentTransactions
-            .map(
-              (tx) =>
-                  '${tx.txidHex}:${tx.minedHeight}:${tx.expiredUnmined}:${tx.txKind}:${tx.displayAmount}',
-            )
-            .join('|') ??
-        '';
+    final recent = activityHistoryStatusSignature(
+      sync?.recentTransactions ?? const [],
+    );
+    return '${activityHistorySnapshot(sync)}|$recent';
   }
 
   @override
@@ -326,6 +342,22 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
             row: buildTransactionActivityRow(
               context: context,
               transaction: tx,
+              showPendingEstimate: !ref
+                  .watch(activityEtaExcludedTxidsProvider)
+                  .contains(activityTxidKey(tx.txidHex)),
+              pendingLabel:
+                  (_hasFreshTransactionHistory &&
+                          _transactionsSnapshot ==
+                              activityHistorySnapshot(
+                                ref.watch(syncProvider).value,
+                              )
+                      ? activityEtaLabelFor(
+                          transaction: tx,
+                          labels: ref.watch(activityEtaLabelsProvider),
+                          giftCard: giftCard,
+                        )
+                      : null) ??
+                  ref.watch(activityPendingFallbackLabelProvider),
               giftCardKind: giftCard?.kind,
               giftCardAmountZatoshi: giftCard?.amountZatoshi,
               giftCardBatchCount: giftCard?.batchCount,

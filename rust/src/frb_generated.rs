@@ -13992,6 +13992,10 @@ impl SseDecode for crate::api::sync::TransactionInfo {
         let mut var_txKind = <String>::sse_decode(deserializer);
         let mut var_displayAmount = <u64>::sse_decode(deserializer);
         let mut var_displayPool = <String>::sse_decode(deserializer);
+        let mut var_activityPool = <Option<String>>::sse_decode(deserializer);
+        let mut var_fundingParentTxid = <Option<String>>::sse_decode(deserializer);
+        let mut var_fundingParentMinedHeight = <Option<u64>>::sse_decode(deserializer);
+        let mut var_fundingParentExpired = <Option<bool>>::sse_decode(deserializer);
         let mut var_createdTime = <u64>::sse_decode(deserializer);
         return crate::api::sync::TransactionInfo {
             txid_hex: var_txidHex,
@@ -14004,6 +14008,10 @@ impl SseDecode for crate::api::sync::TransactionInfo {
             tx_kind: var_txKind,
             display_amount: var_displayAmount,
             display_pool: var_displayPool,
+            activity_pool: var_activityPool,
+            funding_parent_txid: var_fundingParentTxid,
+            funding_parent_mined_height: var_fundingParentMinedHeight,
+            funding_parent_expired: var_fundingParentExpired,
             created_time: var_createdTime,
         };
     }
@@ -18600,6 +18608,12 @@ impl flutter_rust_bridge::IntoDart for crate::api::sync::TransactionInfo {
             self.tx_kind.into_into_dart().into_dart(),
             self.display_amount.into_into_dart().into_dart(),
             self.display_pool.into_into_dart().into_dart(),
+            self.activity_pool.into_into_dart().into_dart(),
+            self.funding_parent_txid.into_into_dart().into_dart(),
+            self.funding_parent_mined_height
+                .into_into_dart()
+                .into_dart(),
+            self.funding_parent_expired.into_into_dart().into_dart(),
             self.created_time.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -22292,6 +22306,10 @@ impl SseEncode for crate::api::sync::TransactionInfo {
         <String>::sse_encode(self.tx_kind, serializer);
         <u64>::sse_encode(self.display_amount, serializer);
         <String>::sse_encode(self.display_pool, serializer);
+        <Option<String>>::sse_encode(self.activity_pool, serializer);
+        <Option<String>>::sse_encode(self.funding_parent_txid, serializer);
+        <Option<u64>>::sse_encode(self.funding_parent_mined_height, serializer);
+        <Option<bool>>::sse_encode(self.funding_parent_expired, serializer);
         <u64>::sse_encode(self.created_time, serializer);
     }
 }
