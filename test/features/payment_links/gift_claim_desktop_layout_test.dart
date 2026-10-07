@@ -47,15 +47,15 @@ void main() {
             await tester.binding.setSurfaceSize(size);
             addTearDown(() => tester.binding.setSurfaceSize(null));
             final boundary = GlobalKey();
+            final theme =
+                Platform.environment['GIFT_DESKTOP_LAYOUT_THEME'] == 'light'
+                ? AppThemeData.light
+                : AppThemeData.dark;
             Future<void> pump(PaymentLinkClaimDesktopState state) async {
               await tester.pumpWidget(
                 MaterialApp(
                   builder: (context, child) => AppTheme(
-                    data:
-                        Platform.environment['GIFT_DESKTOP_LAYOUT_THEME'] ==
-                            'light'
-                        ? AppThemeData.light
-                        : AppThemeData.dark,
+                    data: theme,
                     child: MediaQuery(
                       data: MediaQuery.of(
                         context,
@@ -66,26 +66,29 @@ void main() {
                   home: Scaffold(
                     body: RepaintBoundary(
                       key: boundary,
-                      child: PaymentLinkReceivedDesktopView(
-                        state: state,
-                        card: state == PaymentLinkClaimDesktopState.loading
-                            ? const PaymentLinkLoadingCard()
-                            : const PaymentLinkGiftCard(
-                                artwork: PaymentLinkCardArtwork.ruby,
-                                amountText: '4.45',
-                                showCaret: false,
-                              ),
-                        waitingStatusLabel: 'Checking the gift… 100%',
-                        onBack: () {},
-                        onClaim: () {},
-                        onRevealMessage: hasMessage ? () {} : null,
-                        statusContent: PaymentLinkClaimOutcomeView(
-                          availability: PaymentLinkAvailability.noBalance,
-                          embedded: true,
+                      child: ColoredBox(
+                        color: theme.colors.background.window,
+                        child: PaymentLinkReceivedDesktopView(
+                          state: state,
+                          card: state == PaymentLinkClaimDesktopState.loading
+                              ? const PaymentLinkLoadingCard()
+                              : const PaymentLinkGiftCard(
+                                  artwork: PaymentLinkCardArtwork.ruby,
+                                  amountText: '4.45',
+                                  showCaret: false,
+                                ),
+                          waitingStatusLabel: 'Checking the gift… 100%',
                           onBack: () {},
-                          onCheck: () {},
+                          onClaim: () {},
+                          onRevealMessage: hasMessage ? () {} : null,
+                          statusContent: PaymentLinkClaimOutcomeView(
+                            availability: PaymentLinkAvailability.noBalance,
+                            embedded: true,
+                            onBack: () {},
+                            onCheck: () {},
+                          ),
+                          decoration: const PaymentLinkConfetti(),
                         ),
-                        decoration: const PaymentLinkConfetti(),
                       ),
                     ),
                   ),
