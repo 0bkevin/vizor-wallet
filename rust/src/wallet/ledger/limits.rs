@@ -13,6 +13,10 @@ pub(crate) const MAX_TRANSPARENT_INPUTS: usize = 32;
 pub(crate) const MAX_TRANSPARENT_OUTPUTS: usize = 10;
 pub(crate) const MAX_SHIELDED_ACTIONS_PER_POOL: usize = 32;
 
+/// Payments shown on the device, across Orchard and Ironwood. Internal
+/// change is not displayed and does not consume this review budget.
+pub(crate) const MAX_EXTERNAL_SHIELDED_OUTPUTS: usize = 4;
+
 pub(super) fn ensure_count(label: &str, count: usize, maximum: usize) -> Result<(), String> {
     if count > maximum {
         Err(format!(
@@ -20,5 +24,34 @@ pub(super) fn ensure_count(label: &str, count: usize, maximum: usize) -> Result<
         ))
     } else {
         Ok(())
+    }
+}
+
+pub(crate) fn validate_external_shielded_outputs(
+    orchard_outputs: usize,
+    ironwood_outputs: usize,
+) -> Result<(), String> {
+    let count = orchard_outputs
+        .checked_add(ironwood_outputs)
+        .ok_or("ledger_capacity: Shielded output count overflow")?;
+    ensure_count(
+        "external shielded outputs per transaction",
+        count,
+        MAX_EXTERNAL_SHIELDED_OUTPUTS,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shielded_review_budget_is_independent_of_action_capacity() {
+        validate_external_shielded_outputs(2, 2).unwrap();
+        validate_external_shielded_outputs(4, 0).unwrap();
+        assert!(validate_external_shielded_outputs(3, 2)
+            .unwrap_err()
+            .contains("at most 4"));
+        assert_eq!(MAX_SHIELDED_ACTIONS_PER_POOL, 32);
     }
 }

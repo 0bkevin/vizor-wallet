@@ -34,6 +34,13 @@ const ledgerMemoHashUnsupportedError =
 /// connected earlier keep signing from [kMinimumLedgerZcashAppVersion].
 const kMinimumLedgerZcashAppVersionForNewAccounts = kLedgerMemoHashAppVersion;
 
+/// Ledger's device-review budget, shared by the supported 3.9.3/3.9.4 apps.
+/// This is independent of the 32-action budget per shielded pool: internal
+/// change is excluded, external Orchard and Ironwood outputs are combined.
+/// Rust enforces it when preparing a Gift Card batch. See
+/// `docs/ledger/limitations.md` for all constraints.
+const kLedgerMaxExternalShieldedOutputs = 4;
+
 bool ledgerAppVersionAllowsNewAccounts(String appVersion) =>
     _atLeast(appVersion, kMinimumLedgerZcashAppVersionForNewAccounts);
 

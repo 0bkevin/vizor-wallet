@@ -3953,6 +3953,19 @@ fn validate_payment_link_batch_proposal<NoteRef>(
             }
         }
         HardwareSignerKind::Ledger => {
+            // Review slots are shared across shielded pools, independent of
+            // the per-pool action budget. Internal change does not use a slot.
+            if crate::wallet::ledger::limits::validate_external_shielded_outputs(
+                step.output_count_in_pool(PoolType::ORCHARD),
+                step.output_count_in_pool(PoolType::IRONWOOD),
+            )
+            .is_err()
+            {
+                let max = crate::wallet::ledger::limits::MAX_EXTERNAL_SHIELDED_OUTPUTS;
+                return Err(payment_link_batch_rejection(format_args!(
+                    "has more shielded recipients than your Ledger can display (maximum {max}). {PAYMENT_LINK_BATCH_ADVICE}"
+                )));
+            }
             if step.input_count_in_pool(PoolType::SAPLING) > 0 {
                 return Err(payment_link_batch_rejection(format_args!(
                     "would spend older Sapling funds, which your Ledger can’t sign. {PAYMENT_LINK_BATCH_ADVICE}"
