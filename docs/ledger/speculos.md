@@ -28,6 +28,10 @@ scripts/e2e/ledger-speculos-docker.sh desktop
 VIZOR_LEDGER_E2E_SCENARIO='shields transparent balance with Ledger through Speculos' \
   scripts/e2e/ledger-speculos-docker.sh desktop
 
+# Gift Card UI, four-recipient signing, and fifth-card rejection.
+VIZOR_LEDGER_E2E_SCENARIO='creates four gift cards with Ledger through Speculos' \
+  scripts/e2e/ledger-speculos-docker.sh desktop
+
 # Mobile; the runner supplies the mobile design-token define.
 FLUTTER_DEVICE='<simulator-device-id>' scripts/e2e/ledger-speculos-docker.sh mobile
 
@@ -69,6 +73,13 @@ VIZOR_LEDGER_SPECULOS_ELF='/absolute/path/zcash-nanosplus.elf' \
 - The synthetic DB includes a transparent UTXO and completed external/change
   discovery checkpoints (`complete=2`). Preparation checks the production
   shielding-progress API for one shieldable input; it does not run live discovery.
+- The desktop Gift Card scenario uses a separate DB with a synthetic Ironwood
+  note scanned through the SDK. The real Dart service and Rust proposal reject
+  five cards before saving secrets or signing. The UI clamps the count to four,
+  then uses production fee estimation, PCZT creation, proof generation, Ledger
+  approval, signed-outbox broadcast, and recovery storage to create four cards
+  with one transaction. Wallet-path resolution and secure storage are isolated;
+  a loopback lightwalletd stub accepts the transaction without chain mining.
 - `VIZOR_LEDGER_RUN_ORCHARD_TO_IRONWOOD_CANARY=true` adds the compatibility canary.
   Zcash 3.9.4 has not been run against it; retain the production compatibility guard.
 - Voting builds two real SDK `PreparedDelegationBundle::keystone_request`
