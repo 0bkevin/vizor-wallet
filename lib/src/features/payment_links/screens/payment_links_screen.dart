@@ -2621,6 +2621,9 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
       onShowHelp: _showHelpOverlay,
       onCreate: _startCreate,
       onCreateMultiple: _startBulkCreate,
+      isLedger:
+          _signerFor(ref.watch(accountProvider).value?.activeAccountUuid) ==
+          HardwareSignerKind.ledger,
       onRedeem: () => _showPage(PaymentLinksLocalPage.redeem),
     );
   }
@@ -2646,6 +2649,9 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
       onBack: () => context.go('/home'),
       onCreate: _startCreate,
       onCreateMultiple: _startBulkCreate,
+      isLedger:
+          _signerFor(ref.watch(accountProvider).value?.activeAccountUuid) ==
+          HardwareSignerKind.ledger,
       onRedeem: () => _showPage(PaymentLinksLocalPage.redeem),
       activeTab: _activeCardsTab,
       onTabSelected: (tab) => setState(() => _activeCardsTab = tab),

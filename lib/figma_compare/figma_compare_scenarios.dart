@@ -1190,6 +1190,31 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     builder: buildPaymentLinkBatchAmountUseCase,
   ),
   FigmaCompareScenario(
+    id: 'payment-link-ledger-entry',
+    description: 'Ledger Gift Cards entry with its four-card limit',
+    builder: buildPaymentLinkLedgerEntryUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'payment-link-ledger-batch',
+    description: 'Ledger four-card configuration with the shared count stepper',
+    builder: buildPaymentLinkLedgerBatchUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'payment-link-ledger-batch-empty',
+    description: 'Ledger batch before entering an amount',
+    builder: buildPaymentLinkLedgerBatchEmptyUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'payment-link-ledger-batch-preparing',
+    description: 'Ledger batch while its fee is being calculated',
+    builder: buildPaymentLinkLedgerBatchPreparingUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'payment-link-ledger-batch-error',
+    description: 'Ledger batch with a recoverable fee error',
+    builder: buildPaymentLinkLedgerBatchErrorUseCase,
+  ),
+  FigmaCompareScenario(
     id: 'payment-link-batch-empty',
     description: 'Desktop Gift Card bulk configuration before amount entry',
     builder: buildPaymentLinkBatchEmptyUseCase,

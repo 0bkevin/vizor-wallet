@@ -5,6 +5,8 @@ import '../../providers/rpc_endpoint_provider.dart';
 import '../../core/config/network_config.dart';
 
 /// What Vizor may ask a connected Ledger Zcash app to do, by app version.
+/// Transaction budgets are enforced by Rust `ledger/limits.rs`;
+/// see `docs/ledger/limitations.md` for the full support/enforcement map.
 ///
 /// | Version  | New account | Signing | Memo shown as a hash |
 /// |----------|-------------|---------|----------------------|

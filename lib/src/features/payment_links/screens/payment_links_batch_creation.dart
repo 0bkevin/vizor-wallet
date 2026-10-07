@@ -557,6 +557,7 @@ mixin _PaymentLinksBatchCreation on ConsumerState<PaymentLinksScreen> {
     return PaymentLinkBulkDesktopFlow(
       count: _batchCount,
       maxCount: paymentLinkBatchMaxCount(signer),
+      isLedger: signer == HardwareSignerKind.ledger,
       amountController: _amountController,
       messageController: _messageController,
       artwork: _selectedArtwork,
