@@ -273,6 +273,13 @@ void main() {
           await tester.pumpAndSettle();
           _expectRect(tester.getRect(find.byKey(_slotKey)), original);
           expect(operations.preparedLinks, hasLength(2));
+          await tester.tap(find.text('My Cards'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Redeem a card'));
+          await tester.pumpAndSettle();
+          expect(find.text('Paste card link').hitTestable(), findsOneWidget);
+          expect(find.text('Try again'), findsNothing);
+          expect(find.byKey(_slotKey), findsNothing);
         }
         await tester.pumpWidget(const SizedBox.shrink());
       });

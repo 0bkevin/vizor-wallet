@@ -331,6 +331,11 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     }
     if (page != _page) {
       _mobileNavigationEpoch++;
+      if (kAppFormFactor == AppFormFactor.desktop &&
+          page == PaymentLinksLocalPage.redeem) {
+        _redeemState = PaymentLinkRedeemVisualState.paste;
+        _retryLink = null;
+      }
       if (kAppFormFactor == AppFormFactor.mobile &&
           _page == PaymentLinksLocalPage.redeem) {
         _redeemState = PaymentLinkRedeemVisualState.paste;
