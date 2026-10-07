@@ -94,4 +94,81 @@ flutter:
       isEmpty,
     );
   });
+
+  test('a directory declaration rejects variants without a matching base', () {
+    const orphan = 'assets/icons/2.0x/new.webp';
+    expect(
+      platformAssetContractErrors(
+        '''
+flutter:
+  assets:
+    - assets/icons/
+''',
+        [
+          'assets/icons/book.svg',
+          'assets/icons/2.0x/book.svg',
+          orphan,
+          'assets/icons/3.0x/new.webp',
+        ],
+      ),
+      unorderedEquals([
+        '$orphan: missing [android, ios, linux, macos, web, windows]; unexpected []',
+        'assets/icons/3.0x/new.webp: missing [android, ios, linux, macos, web, windows]; unexpected []',
+      ]),
+    );
+  });
+
+  test('an explicit logical asset permits variants without a base file', () {
+    expect(
+      platformAssetContractErrors(
+        '''
+flutter:
+  assets:
+    - assets/icons/
+    - assets/icons/new.webp
+''',
+        ['assets/icons/2.0x/new.webp', 'assets/icons/2.x/new.webp'],
+      ),
+      isEmpty,
+    );
+  });
+
+  for (final entry in ['assets/icons/2.0x/', 'assets/icons/2.0x/new.webp']) {
+    test('an explicit variant declaration permits $entry without a base', () {
+      expect(
+        platformAssetContractErrors(
+          '''
+flutter:
+  assets:
+    - $entry
+''',
+          ['assets/icons/2.0x/new.webp'],
+        ),
+        isEmpty,
+      );
+    });
+  }
+
+  test('directory variants inherit their matching base platform restriction', () {
+    const declaration = '''
+flutter:
+  assets:
+    - path: assets/icons/desktop/
+      platforms: [linux, macos, web, windows]
+''';
+    const variants = [
+      'assets/icons/desktop/icon.webp',
+      'assets/icons/desktop/2.0x/icon.webp',
+    ];
+    expect(platformAssetContractErrors(declaration, variants), isEmpty);
+    expect(
+      platformAssetContractErrors(
+        '$declaration    - assets/icons/desktop/2.0x/\n',
+        variants,
+      ),
+      contains(
+        'assets/icons/desktop/2.0x/icon.webp: missing []; unexpected [android, ios]',
+      ),
+    );
+  });
 }

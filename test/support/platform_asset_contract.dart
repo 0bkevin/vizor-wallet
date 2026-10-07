@@ -23,14 +23,15 @@ List<String> platformAssetContractErrors(
       for (final font in (family as YamlMap)['fonts'] as YamlList)
         (font as YamlMap)['asset'] as String,
   };
+  final assets = runtimeAssets.toSet();
   final errors = <String>[];
-  for (final asset in runtimeAssets) {
+  for (final asset in assets) {
     final actual = <String>{if (fonts.contains(asset)) ..._allPlatforms};
     for (final entry in entries) {
       final path = entry is String
           ? entry
           : (entry as YamlMap)['path'] as String;
-      if (!_covers(path, asset)) continue;
+      if (!_covers(path, asset, assets)) continue;
       final configured = entry is String
           ? <String>{}
           : ((entry as YamlMap)['platforms'] as YamlList? ?? [])
@@ -50,14 +51,19 @@ List<String> platformAssetContractErrors(
   return errors;
 }
 
-bool _covers(String entry, String asset) {
+bool _covers(String entry, String asset, Set<String> runtimeAssets) {
   if (entry == asset) return true;
   if (entry.endsWith('/')) {
     if (!asset.startsWith(entry)) return false;
     final tail = asset.substring(entry.length).split('/');
+    // Flutter discovers directory variants from its direct files, so an
+    // orphan variant needs an explicit declaration rather than just a parent.
     return tail.length == 1 ||
-        (tail.length == 2 && _resolutionDirectory.hasMatch(tail.first));
+        (tail.length == 2 &&
+            _resolutionDirectory.hasMatch(tail.first) &&
+            runtimeAssets.contains('$entry${tail.last}'));
   }
+  // An explicitly declared logical image can have only resolution variants.
   final slash = entry.lastIndexOf('/');
   if (slash < 0) return false;
   final directory = entry.substring(0, slash + 1);
