@@ -3,8 +3,11 @@ import 'dart:math';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../src/app_bootstrap.dart';
+import '../src/features/keystone/widgets/keystone_qr_scanner_card.dart';
+import '../src/features/payment_links/screens/desktop_payment_link_scan_screen.dart';
 import '../src/features/onboarding/create/customise_account_screen.dart';
 import '../src/features/payment_links/models/vizor_payment_link.dart';
 import '../src/features/payment_links/providers/gift_card_entry_price_provider.dart';
@@ -40,6 +43,90 @@ final _inspection = PaymentLinkClaimInspection(
 
 Widget buildDesktopGiftEntryUseCase(BuildContext context) =>
     const _Capture(screen: GiftClaimScreen());
+Widget buildDesktopGiftScanActiveUseCase(BuildContext context) =>
+    const _Capture(screen: _GiftScannerCapture(denied: false));
+Widget buildDesktopGiftScanDeniedUseCase(BuildContext context) =>
+    const _Capture(screen: _GiftScannerCapture(denied: true));
+
+class _GiftScannerCapture extends StatefulWidget {
+  const _GiftScannerCapture({required this.denied});
+  final bool denied;
+
+  @override
+  State<_GiftScannerCapture> createState() => _GiftScannerCaptureState();
+}
+
+class _GiftScannerCaptureState extends State<_GiftScannerCapture> {
+  late final _controller = _PreviewScannerController(widget.denied);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => DesktopPaymentLinkScanView(
+    onBack: () {},
+    scanner: KeystoneQrScannerCard.plain(
+      controller: _controller,
+      cameraViewBuilder: (_, _) => const ColoredBox(color: Color(0xff343a3d)),
+      onPlainComplete: (_) {},
+      error: null,
+      unavailableMessage: 'Connect a camera to scan the gift card QR code.',
+    ),
+  );
+}
+
+/// The comparison fixture never opens a native camera or platform channel.
+class _PreviewScannerController implements MobileScannerController {
+  _PreviewScannerController(bool denied)
+    : _state = ValueNotifier(
+        const MobileScannerState.uninitialized().copyWith(
+          isInitialized: true,
+          isRunning: !denied,
+          camera: _camera,
+          error: denied
+              ? const MobileScannerException(
+                  errorCode: MobileScannerErrorCode.permissionDenied,
+                )
+              : null,
+        ),
+      );
+
+  static final _camera = MobileScannerCameraInfo.fromMap({
+    'id': 'preview-camera',
+    'name': 'Desktop camera',
+    'isDefault': true,
+  });
+  final ValueNotifier<MobileScannerState> _state;
+  @override
+  MobileScannerState get value => _state.value;
+  @override
+  set value(MobileScannerState value) => _state.value = value;
+  @override
+  void addListener(VoidCallback listener) => _state.addListener(listener);
+  @override
+  void removeListener(VoidCallback listener) => _state.removeListener(listener);
+  @override
+  Stream<List<MobileScannerCameraInfo>> get camerasStream =>
+      const Stream.empty();
+  @override
+  Future<List<MobileScannerCameraInfo>> getAvailableCameras() async => [
+    _camera,
+    MobileScannerCameraInfo.fromMap({
+      'id': 'external',
+      'name': 'External camera',
+    }),
+  ];
+  @override
+  Future<void> dispose() async => _state.dispose();
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+    'Read-only scanner preview: ${invocation.memberName}',
+  );
+}
+
 Widget buildDesktopGiftAdditionalEntryUseCase(BuildContext context) =>
     const _Capture(screen: GiftClaimScreen(addingAccount: true));
 Widget buildDesktopGiftCheckingUseCase(BuildContext context) =>

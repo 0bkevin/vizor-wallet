@@ -94,6 +94,7 @@ import 'src/features/payment_links/providers/payment_link_claim_coordinator_prov
 import 'src/features/payment_links/providers/payment_link_intake_provider.dart';
 import 'src/features/payment_links/providers/gift_claim_flow_provider.dart';
 import 'src/features/payment_links/screens/gift_claim_screen.dart';
+import 'src/features/payment_links/screens/desktop_payment_link_scan_screen.dart';
 import 'src/features/payment_links/screens/desktop_gift_password_screen.dart';
 import 'src/features/payment_links/screens/desktop_gift_customise_screen.dart';
 import 'src/features/payment_links/screens/gift_customise_account_screen.dart'
@@ -566,7 +567,8 @@ String? appRedirect({
   if (_isRouteOrChild(state.matchedLocation, '/gift')) {
     if (hasWallet) {
       if (requiresUnlock) return '/unlock';
-      if (state.matchedLocation == '/gift' &&
+      if ((state.matchedLocation == '/gift' ||
+              state.matchedLocation == '/gift/scan') &&
           state.uri.queryParameters['addAccount'] == 'true') {
         return null;
       }
@@ -697,6 +699,13 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
   GoRoute(
     path: '/gift',
     builder: (_, state) => GiftClaimScreen(
+      addingAccount: state.uri.queryParameters['addAccount'] == 'true',
+    ),
+  ),
+  GoRoute(
+    path: '/gift/scan',
+    builder: (_, state) => DesktopPaymentLinkScanScreen(
+      networkName: state.uri.queryParameters['network'] ?? 'main',
       addingAccount: state.uri.queryParameters['addAccount'] == 'true',
     ),
   ),
@@ -1388,6 +1397,13 @@ List<RouteBase> _desktopRoutes(Ref ref) => [
       initialCards: state.extra is PaymentLinkCardsSnapshot
           ? state.extra! as PaymentLinkCardsSnapshot
           : null,
+    ),
+  ),
+  GoRoute(
+    path: '/payment-links/scan',
+    builder: (_, state) => DesktopPaymentLinkScanScreen(
+      networkName: state.uri.queryParameters['network'] ?? 'main',
+      onboarding: false,
     ),
   ),
   GoRoute(

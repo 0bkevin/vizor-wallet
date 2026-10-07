@@ -48,7 +48,7 @@ import '../services/payment_link_sharing.dart';
 import '../widgets/gift_card_usage_status.dart';
 import '../widgets/mobile/payment_link_claim_account_sheet.dart';
 import '../widgets/mobile/payment_link_mobile_views.dart';
-import '../widgets/mobile/payment_link_scan_sheet.dart';
+import '../providers/payment_link_scanner_provider.dart';
 import '../widgets/mobile/payment_link_share_sheet.dart';
 import '../widgets/payment_link_archive_header.dart';
 import '../widgets/payment_link_card_flip.dart';

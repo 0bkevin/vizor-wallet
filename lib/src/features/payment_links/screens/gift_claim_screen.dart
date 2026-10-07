@@ -29,7 +29,7 @@ import '../services/payment_link_clipboard.dart';
 import '../services/payment_link_received_store.dart';
 import '../services/payment_link_service.dart';
 import '../widgets/mobile/payment_link_mobile_views.dart';
-import '../widgets/mobile/payment_link_scan_sheet.dart';
+import '../providers/payment_link_scanner_provider.dart';
 import '../widgets/payment_link_card_flip.dart';
 import '../widgets/desktop_gift_entry_view.dart';
 import '../widgets/payment_link_card_motion.dart';

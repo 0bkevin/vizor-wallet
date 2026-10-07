@@ -6,7 +6,7 @@ import 'package:zcash_wallet/src/features/payment_links/providers/gift_card_chec
 import 'package:zcash_wallet/src/rust/api/sync.dart' as rust_sync;
 
 import 'package:zcash_wallet/src/features/payment_links/providers/gift_card_entry_price_provider.dart';
-import 'package:zcash_wallet/src/features/payment_links/widgets/mobile/payment_link_scan_sheet.dart';
+import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_scanner_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/widgets/mobile/payment_link_mobile_views.dart';
 import 'dart:io';
 import 'dart:ui' show SemanticsAction;

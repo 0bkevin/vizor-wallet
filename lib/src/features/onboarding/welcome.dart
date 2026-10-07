@@ -17,6 +17,7 @@ import '../settings/widgets/custom_endpoint_settings_panel.dart';
 import 'shared/onboarding_welcome_art.dart';
 import 'shared/welcome_accent_button.dart';
 import 'shared/welcome_button_tokens.dart';
+import 'shared/welcome_gift_card_button.dart';
 import 'shared/welcome_video_backdrop.dart';
 import 'providers/welcome_network_settings_provider.dart';
 
@@ -242,22 +243,10 @@ class _WelcomeContent extends StatelessWidget {
                 key: const ValueKey('welcome_redeem_card_button'),
                 button: true,
                 enabled: true,
-                child: AppButton(
-                  expand: true,
+                child: WelcomeGiftCardButton(
                   height: 44,
-                  variant: AppButtonVariant.ghost,
-                  disabledBackgroundColor: const Color(0x00000000),
-                  leading: const AppIcon(
-                    AppIcons.giftCard,
-                    size: 20,
-                    color: WelcomeButtonTokens.secondaryLabel,
-                  ),
                   onPressed: () => context.go(
                     showBackButton ? '/gift?addAccount=true' : '/gift',
-                  ),
-                  child: const Text(
-                    'Activate gift card',
-                    style: TextStyle(color: WelcomeButtonTokens.secondaryLabel),
                   ),
                 ),
               ),

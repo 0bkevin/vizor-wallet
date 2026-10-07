@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zcash_wallet/src/core/widgets/app_button.dart';
 import 'package:zcash_wallet/src/features/payment_links/models/vizor_payment_link.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/gift_claim_import_store.dart';
-import 'package:zcash_wallet/src/features/payment_links/widgets/mobile/payment_link_scan_sheet.dart';
+import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_scanner_provider.dart';
 
 import '../../support/payment_links_screen_support.dart';
 

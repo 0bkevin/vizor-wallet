@@ -63,6 +63,7 @@ class FigmaCompareScenario {
     this.mobile = false,
     this.scrollToEnd = false,
     this.allowFocus = false,
+    this.allowPointer = false,
     this.renderShadows = false,
     this.platform,
   });
@@ -74,6 +75,7 @@ class FigmaCompareScenario {
   final bool mobile;
   final bool scrollToEnd;
   final bool allowFocus;
+  final bool allowPointer;
   final bool renderShadows;
   final TargetPlatform? platform;
 }
@@ -118,6 +120,19 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     id: 'desktop-gift-entry',
     description: 'Gift Card entry',
     builder: buildDesktopGiftEntryUseCase,
+    platform: TargetPlatform.macOS,
+  ),
+  FigmaCompareScenario(
+    id: 'desktop-gift-scan-active',
+    description:
+        'Gift Card desktop scan page with a deterministic camera preview',
+    builder: buildDesktopGiftScanActiveUseCase,
+    platform: TargetPlatform.macOS,
+  ),
+  FigmaCompareScenario(
+    id: 'desktop-gift-scan-denied',
+    description: 'Gift Card desktop scan page camera permission recovery',
+    builder: buildDesktopGiftScanDeniedUseCase,
     platform: TargetPlatform.macOS,
   ),
   FigmaCompareScenario(
@@ -327,6 +342,13 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     id: 'desktop-onboarding-welcome',
     description: 'Desktop initial Welcome with deterministic video poster',
     builder: buildDesktopWelcomeCapture,
+    renderShadows: true,
+  ),
+  FigmaCompareScenario(
+    id: 'desktop-onboarding-welcome-hover',
+    description: 'Desktop Welcome gift activation with a mouse hover',
+    builder: buildDesktopWelcomeCapture,
+    allowPointer: true,
     renderShadows: true,
   ),
   FigmaCompareScenario(

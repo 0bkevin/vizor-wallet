@@ -22,6 +22,7 @@ import 'package:zcash_wallet/src/core/storage/linux_keyring_coordinator.dart';
 import 'package:zcash_wallet/src/core/theme/app_theme.dart';
 import 'package:zcash_wallet/src/core/widgets/app_toast.dart';
 import 'package:zcash_wallet/src/core/widgets/app_button.dart';
+import 'package:zcash_wallet/src/core/widgets/app_back_link.dart';
 import 'package:zcash_wallet/src/features/onboarding/create/customise_account_screen.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/gift_card_entry_price_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_claim_coordinator_provider.dart';
@@ -29,7 +30,8 @@ import 'package:zcash_wallet/src/features/payment_links/models/vizor_payment_lin
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_service.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_received_store.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_clipboard.dart';
-import 'package:zcash_wallet/src/features/payment_links/widgets/mobile/payment_link_scan_sheet.dart';
+import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_scanner_provider.dart';
+import 'package:zcash_wallet/src/features/payment_links/screens/desktop_payment_link_scan_screen.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
 import 'package:zcash_wallet/src/providers/app_security_provider.dart';
 import 'package:zcash_wallet/src/providers/router_refresh_provider.dart';
@@ -178,6 +180,28 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets(
+    'Gift scan page preserves the existing-wallet add-account route',
+    (tester) async {
+      await pump(tester, existing: true);
+      container.read(_routerProvider).go('/gift?addAccount=true');
+      await tester.pumpAndSettle();
+      await tester.tap(keyed('gift_desktop_scan_button'));
+      await tester.pumpAndSettle();
+      final location = GoRouterState.of(
+        tester.element(find.byType(DesktopPaymentLinkScanScreen)),
+      ).uri;
+      expect(location.path, '/gift/scan');
+      expect(location.queryParameters['addAccount'], 'true');
+      expect(find.text('Scan QR Code'), findsOneWidget);
+      final passwordLabels = find.text('Set Password');
+      expect(passwordLabels, findsNothing);
+      await tester.tap(find.byType(AppBackLink));
+      await tester.pumpAndSettle();
+      expect(keyed('gift_desktop_scan_button'), findsOneWidget);
+    },
+  );
 
   Future<void> paste(WidgetTester tester) async {
     await tester.tap(keyed('welcome_redeem_card_button'));
