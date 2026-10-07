@@ -202,7 +202,8 @@ fn serialize_shielded_action(
     packets.push(spend);
 
     let mut derivation = Vec::with_capacity(33 + action.signing_path.len() * 4);
-    derivation.extend_from_slice(&action.seed_fingerprint);
+    // Keep account metadata local; firmware derives keys from the path.
+    derivation.extend_from_slice(&[0; 32]);
     derivation.extend_from_slice(&pack_derivation_path(&action.signing_path)?);
     packets.push(derivation);
 
@@ -233,7 +234,8 @@ fn serialize_bip32_derivation(derivation: Option<&Bip32Derivation>) -> Result<Ve
 
     let mut bytes = vec![1];
     bytes.extend_from_slice(&derivation.pubkey);
-    bytes.extend_from_slice(&derivation.seed_fingerprint);
+    // The wire fingerprint is not used by the device for key validation.
+    bytes.extend_from_slice(&[0; 32]);
     bytes.extend_from_slice(&pack_derivation_path(&derivation.signing_path)?);
     ensure_packet_size(&bytes)?;
     Ok(bytes)
@@ -577,7 +579,8 @@ mod tests {
         assert_eq!(packets[3][0], 1);
         assert_eq!(packets[3][1], 1);
         assert_eq!(&packets[3][2..35], &transparent_input().derivation.pubkey);
-        assert_eq!(&packets[3][35..67], &[0x11; 32]);
+        assert_eq!(&packets[3][35..67], &[0; 32]);
+        assert_eq!(transparent_input().derivation.seed_fingerprint, [0x11; 32]);
         assert_eq!(packets[3][67], 5);
         assert_eq!(
             hex::encode(&packets[3][68..]),
@@ -588,6 +591,23 @@ mod tests {
     #[test]
     fn transparent_input_packets_encode_empty_bundle() {
         assert_eq!(serialize_transparent_inputs(&[]).unwrap(), vec![vec![0]]);
+    }
+
+    #[test]
+    fn shielded_wire_fingerprint_is_zero_without_mutating_local_metadata() {
+        let mut action = shielded_action();
+        action.seed_fingerprint = [0x22; 32];
+        action.signing_path = vec![0x8000_0020, 0x8000_0085, 0x8000_0007];
+        let mut packets = Vec::new();
+        serialize_shielded_action(&action, None, &mut packets).unwrap();
+        assert_eq!(&packets[1][..32], &[0; 32]);
+        assert_eq!(
+            &packets[1][32..],
+            pack_derivation_path(&action.signing_path)
+                .unwrap()
+                .as_slice()
+        );
+        assert_eq!(action.seed_fingerprint, [0x22; 32]);
     }
 
     #[test]
