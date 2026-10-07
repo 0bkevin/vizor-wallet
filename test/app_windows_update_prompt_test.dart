@@ -114,6 +114,44 @@ void main() {
     expect(find.text('Download now or keep working.'), findsOneWidget);
   });
 
+  testWidgets('setup rejects a restart captured on an eligible route', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final updates = _RecordingReadyWindowsUpdateNotifier();
+    await tester.pumpWidget(
+      _appHarness(
+        bootstrap: _backupBootstrap,
+        windowsUpdateOverride: windowsUpdateProvider.overrideWith(
+          () => updates,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final router = GoRouter.of(
+      tester.element(find.byType(SettingsSeedPhraseScreen)),
+    );
+    router.go('/settings');
+    await tester.pumpAndSettle();
+    final restart = tester
+        .widget<AppButton>(find.widgetWithText(AppButton, 'Restart'))
+        .onPressed!;
+
+    router.go('/setup/backup');
+    await tester.pumpAndSettle();
+    restart();
+    await tester.pumpAndSettle();
+    expect(updates.restarts, 0);
+    expect(find.byType(SettingsSeedPhraseScreen), findsOneWidget);
+    expect(find.text('Update ready'), findsNothing);
+
+    router.go('/settings');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(AppButton, 'Restart'));
+    expect(updates.restarts, 1);
+  });
+
   testWidgets('Tor-connected download asks before continuing through Tor', (
     tester,
   ) async {

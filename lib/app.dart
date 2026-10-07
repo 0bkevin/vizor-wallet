@@ -25,6 +25,7 @@ import 'src/core/navigation/mobile_routes.dart';
 import 'src/core/navigation/incoming_link_dispatch.dart';
 import 'src/core/navigation/external_action_guard_provider.dart';
 import 'src/core/navigation/payment_uri_drain_policy.dart';
+import 'src/core/navigation/windows_update_prompt_policy.dart';
 import 'src/core/navigation/payload_page_key.dart';
 import 'src/core/motion/onboarding_motion.dart';
 import 'src/core/security/background_auto_lock_host.dart';
@@ -2059,7 +2060,7 @@ class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
         // weakest intent there is ("open Vizor"), and Vizor is already open,
         // so it loses to anything in progress: drop it as silently as an
         // unknown link.
-        if (isOnboardingLocation(_currentLocation)) return;
+        if (isAccountSetupLocation(_currentLocation)) return;
         widget.router.go('/home');
       case IncomingLinkUnknown():
         // Silent by contract — see `classifyIncomingLink`.
@@ -2448,23 +2449,8 @@ class _WindowsUpdatePromptHostState
     return widget.router.routerDelegate.currentConfiguration.uri.path;
   }
 
-  bool _canShowForCurrentRoute() {
-    final path = _currentPath;
-    if (path == '/welcome' ||
-        path == '/add-account' ||
-        path == '/lost-password' ||
-        path.startsWith('/onboarding/') ||
-        path.startsWith('/import') ||
-        path.startsWith('/import-keystone') ||
-        path.startsWith('/send') ||
-        path.startsWith('/setup/backup') ||
-        path.startsWith('/settings/secret-passphrase') ||
-        path.startsWith('/settings/viewing-key') ||
-        path.startsWith('/settings/change-password')) {
-      return false;
-    }
-    return true;
-  }
+  bool _canShowForCurrentRoute() =>
+      canShowWindowsUpdatePromptAtLocation(_currentPath);
 
   String _promptKey(WindowsUpdateState state) {
     // Each failure gets its own key: dismissing one must not hide the next.
@@ -2556,9 +2542,10 @@ class _WindowsUpdatePromptHostState
                           unawaited(_handleDownload());
                         },
                         onRestart: () {
-                          if (ref
-                              .read(externalActionGuardProvider)
-                              .blocks(ExternalAction.updatePrompt)) {
+                          if (!_canShowForCurrentRoute() ||
+                              ref
+                                  .read(externalActionGuardProvider)
+                                  .blocks(ExternalAction.updatePrompt)) {
                             return;
                           }
                           unawaited(
