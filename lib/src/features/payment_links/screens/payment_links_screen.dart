@@ -49,7 +49,7 @@ import '../services/payment_link_sharing.dart';
 import '../widgets/gift_card_usage_status.dart';
 import '../widgets/mobile/payment_link_claim_account_sheet.dart';
 import '../widgets/mobile/payment_link_mobile_views.dart';
-import '../widgets/mobile/payment_link_scan_sheet.dart';
+import '../providers/payment_link_scanner_provider.dart';
 import '../widgets/mobile/payment_link_share_sheet.dart';
 import '../widgets/payment_link_archive_header.dart';
 import '../widgets/payment_link_card_flip.dart';
@@ -2596,6 +2596,8 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
                     state: _redeemState,
                     onBack: () => _showPage(PaymentLinksLocalPage.home),
                     onPaste: _operationInProgress ? null : _runRedeemAction,
+                    onScan: _scanPaymentLink,
+                    scanEnabled: !_operationInProgress,
                     onClearClipboard: _operationInProgress
                         ? null
                         : _clearClipboard,
@@ -2611,7 +2613,7 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
     }
     return PaymentLinksHomeDesktopView(
       illustration: Image.asset(
-        'assets/illustrations/payment_links/payment_link_empty_card.png',
+        'assets/illustrations/payment_links/payment_link_empty_card.webp',
         width: 243,
         height: 162,
         fit: BoxFit.contain,
