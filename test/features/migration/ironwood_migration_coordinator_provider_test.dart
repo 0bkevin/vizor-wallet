@@ -622,6 +622,9 @@ void main() {
         recoverOutbox: (_) async => throw StateError(
           'Ironwood migration credential is missing for the active run.',
         ),
+        // A height snapshot may permit ordinary continuation; keep this batch
+        // scheduled so the test checks error retention rather than progress.
+        broadcast: (_) async => _result('broadcast_scheduled'),
         syncState: SyncState(),
       );
       addTearDown(container.dispose);
@@ -644,6 +647,24 @@ void main() {
 
       expect(recoveries, [_softwareUuid]);
       expect(broadcasts, isEmpty);
+      expect(
+        container
+            .read(ironwoodMigrationCoordinatorProvider)
+            .errors[_softwareUuid],
+        contains('credential is missing for the active run'),
+      );
+      await coordinator.refreshNow();
+      expect(
+        container
+            .read(ironwoodMigrationCoordinatorProvider)
+            .errors[_softwareUuid],
+        contains('credential is missing for the active run'),
+      );
+      (container.read(syncProvider.notifier) as FakeSyncNotifier).emit(
+        SyncState(scannedHeight: 1_000, chainTipHeight: 1_000),
+      );
+      await coordinator.refreshNow();
+      expect(recoveries, [_softwareUuid]);
       expect(
         container
             .read(ironwoodMigrationCoordinatorProvider)
@@ -1506,6 +1527,123 @@ void main() {
       await coordinator.retry(_softwareUuid, status: statuses[_softwareUuid]);
       await coordinator.refreshNow();
 
+      expect(recoveries, [_softwareUuid, _softwareUuid]);
+      expect(
+        container
+            .read(ironwoodMigrationCoordinatorProvider)
+            .errors[_softwareUuid],
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'cached outbox errors survive an unknown height until batch progress',
+    () async {
+      final statuses = {
+        _softwareUuid: _status('broadcast_scheduled', scheduledHeight: 1_000),
+        _hardwareUuid: _status('complete', activeRunId: null),
+      };
+      final recoveries = <String>[];
+      final container = _container(
+        statuses: statuses,
+        softwareStarts: [],
+        broadcasts: [],
+        outboxRecoveries: recoveries,
+        recoverOutbox: (_) async => const IronwoodMigrationOutboxRunResult(
+          outcome: IronwoodMigrationOutboxRunOutcome.noWork,
+          observedHeight: 1_000,
+        ),
+        syncState: SyncState(),
+      );
+      addTearDown(container.dispose);
+      final subscription = container.listen(
+        ironwoodMigrationCoordinatorProvider,
+        (_, _) {},
+        fireImmediately: true,
+      );
+      addTearDown(subscription.close);
+      await container.read(syncProvider.future);
+      final coordinator = container.read(
+        ironwoodMigrationCoordinatorProvider.notifier,
+      );
+
+      await expectLater(
+        coordinator.retry(_softwareUuid, status: statuses[_softwareUuid]),
+        throwsA(isA<StateError>()),
+      );
+      await coordinator.refreshNow();
+      expect(recoveries, [_softwareUuid]);
+      expect(
+        container
+            .read(ironwoodMigrationCoordinatorProvider)
+            .errors[_softwareUuid],
+        contains('not available in the background outbox'),
+      );
+
+      statuses[_softwareUuid] = _status('waiting_migration_confirmations');
+      await coordinator.refreshNow();
+      expect(
+        container
+            .read(ironwoodMigrationCoordinatorProvider)
+            .errors[_softwareUuid],
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'thrown recovery errors wait for cooldown and clear on successful retry',
+    () async {
+      var now = DateTime(2026, 10, 7);
+      final statuses = {
+        _softwareUuid: _status('broadcast_scheduled', scheduledHeight: 1_000),
+        _hardwareUuid: _status('complete', activeRunId: null),
+      };
+      final recoveries = <String>[];
+      final container = _container(
+        statuses: statuses,
+        softwareStarts: [],
+        broadcasts: [],
+        now: () => now,
+        outboxRecoveries: recoveries,
+        recoverOutbox: (_) async {
+          if (recoveries.length == 1) {
+            throw StateError('missing migration credential');
+          }
+          return const IronwoodMigrationOutboxRunResult(
+            outcome: IronwoodMigrationOutboxRunOutcome.waiting,
+            accountUuid: _softwareUuid,
+            observedHeight: 1_000,
+            nextHeight: 1_001,
+          );
+        },
+        syncState: SyncState(scannedHeight: 1_000, chainTipHeight: 1_000),
+      );
+      addTearDown(container.dispose);
+      final subscription = container.listen(
+        ironwoodMigrationCoordinatorProvider,
+        (_, _) {},
+        fireImmediately: true,
+      );
+      addTearDown(subscription.close);
+      await container.read(syncProvider.future);
+      final coordinator = container.read(
+        ironwoodMigrationCoordinatorProvider.notifier,
+      );
+
+      await coordinator.refreshNow();
+      await coordinator.refreshNow();
+      expect(recoveries, [_softwareUuid]);
+      expect(
+        container
+            .read(ironwoodMigrationCoordinatorProvider)
+            .errors[_softwareUuid],
+        contains('missing migration credential'),
+      );
+
+      now = now.add(const Duration(seconds: 31));
+      await coordinator.refreshNow();
       expect(recoveries, [_softwareUuid, _softwareUuid]);
       expect(
         container
@@ -2404,6 +2542,7 @@ ProviderContainer _container({
   bool isMobile = true,
   AppSecurityState? initialSecurityState,
   IronwoodMigrationStopper? stopMigrationRun,
+  DateTime Function()? now,
 }) {
   final service = _CoordinatorTestMigrationService(
     usesNativeOutbox: usesNativeOutbox,
@@ -2504,6 +2643,10 @@ ProviderContainer _container({
         () => FakeSyncNotifier(syncState ?? SyncState()),
       ),
       ironwoodMigrationServiceProvider.overrideWithValue(service),
+      if (now != null)
+        ironwoodMigrationCoordinatorProvider.overrideWith(
+          () => IronwoodMigrationCoordinator(now: now),
+        ),
     ],
   );
 }
