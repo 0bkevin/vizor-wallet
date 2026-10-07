@@ -12,6 +12,7 @@ import 'package:zcash_wallet/src/core/config/rpc_endpoint_config.dart';
 import 'package:zcash_wallet/src/core/config/swap_feature_config.dart';
 import 'package:zcash_wallet/src/core/profile_pictures.dart';
 import 'package:zcash_wallet/src/features/ledger/services/ledger_signing_progress.dart';
+import 'package:zcash_wallet/src/features/ledger/services/ledger_signed_operation_service.dart';
 import 'package:zcash_wallet/src/features/ledger/services/ledger_signing_service.dart';
 import 'package:zcash_wallet/src/features/migration/providers/ironwood_migration_announcement_provider.dart';
 import 'package:zcash_wallet/src/features/migration/providers/ironwood_migration_coordinator_provider.dart';
@@ -60,6 +61,7 @@ Future<void> pumpPaymentLinksScreen(
   PaymentLinkLedgerFundingService? ledgerFunding,
   PaymentLinkRecoveryStore? recoveryStore,
   LedgerPcztSigner? ledgerSigner,
+  LedgerSignedOperationService? ledgerOperations,
   PaymentLinkQrImageSaver? qrImageSaver,
   PaymentLinkQrShareHandler? qrShareHandler,
   PaymentLinkScanner? scanner,
@@ -134,6 +136,10 @@ Future<void> pumpPaymentLinksScreen(
                   .begin(accountUuid)('reviewing');
               return ledgerSigner(accountUuid, pcztBytes);
             },
+          ),
+        if (ledgerOperations != null)
+          ledgerSignedOperationServiceProvider.overrideWithValue(
+            ledgerOperations,
           ),
         if (ledgerFunding != null)
           ledgerOperationCancellerProvider.overrideWithValue(() async {}),

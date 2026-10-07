@@ -3,6 +3,8 @@
 Run from the repository root with Docker running. The runner builds a Zcash Nano
 S+ ELF and creates one fresh, headless Speculos instance per scenario.
 
+Read [device-app limits](limitations.md) before changing a Ledger product flow.
+
 ## Requirements
 
 - Bash, Docker, Git, curl, jq.
@@ -57,6 +59,11 @@ VIZOR_LEDGER_SPECULOS_ELF='/absolute/path/zcash-nanosplus.elf' \
 
 ## Test boundaries
 
+- Signing smoke checks the account public key before any PCZT APDU, rejects a
+  mismatched expected key, and then signs/finalizes through the production API.
+- Its pre-Ironwood fixture activates NU6.2 and leaves NU6.3/NU7 inactive, so a
+  newly added SDK upgrade cannot silently turn this V5 smoke into an unsupported
+  future-branch transaction.
 - UFVK export needs a four-second status-screen wait in the Rust harness and
   Flutter import/send scenario. This adds no delay to production UFVK handling.
 - The synthetic DB includes a transparent UTXO and completed external/change

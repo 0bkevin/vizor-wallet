@@ -3960,6 +3960,7 @@ fn ledger_shielding_limits_inputs_and_preserves_account_scope_paths() {
             account_index: 7,
             coin_type: 133,
             seed_fingerprint: fp,
+            device_public_key: [0; 33],
         },
     )
     .unwrap();

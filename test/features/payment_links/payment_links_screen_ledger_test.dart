@@ -23,6 +23,7 @@ void main() {
         operations: _StoreBackedOperations(h.recovery),
         batchOperations: batch,
         ledgerFunding: h.service,
+        ledgerOperations: h.operations,
         recoveryStore: h.recovery,
         ledgerSigner: (_, _) => signature.future,
       );
@@ -63,6 +64,7 @@ void main() {
       bootstrap: ledgerGiftBootstrap,
       batchOperations: batch,
       ledgerFunding: h.service,
+      ledgerOperations: h.operations,
       recoveryStore: h.recovery,
       ledgerSigner: (_, _) => signature.future,
     );
@@ -245,6 +247,7 @@ Future<void> _openLedgerSigning(
     tester,
     bootstrap: ledgerGiftBootstrap,
     ledgerFunding: h.service,
+    ledgerOperations: h.operations,
     ledgerSigner: (_, _) => signature.future,
   );
   await tester.tap(find.text('Create new card'));
