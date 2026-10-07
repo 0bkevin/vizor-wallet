@@ -11,6 +11,7 @@ import 'package:zcash_wallet/src/core/navigation/external_action_guard_provider.
 import 'package:zcash_wallet/src/features/address_scan/widgets/mobile_address_scan_card.dart';
 import 'package:zcash_wallet/src/features/payment_links/models/vizor_payment_link.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_scanner_provider.dart';
+import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_intake_provider.dart';
 import 'package:zcash_wallet/src/services/qr_scanner.dart';
 import 'package:zcash_wallet/src/features/keystone/widgets/keystone_qr_scanner_card.dart';
 import 'package:zcash_wallet/src/rust/frb_generated.dart';
@@ -191,6 +192,76 @@ void main() {
     },
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
+  for (final completeScan in [false, true]) {
+    testWidgets(
+      'Settings scanner queues an incoming Gift Card until ${completeScan ? 'the scanned preview is left' : 'Back'}',
+      (tester) async {
+        final operations = FakePaymentLinkOperations();
+        await pumpPaymentLinksScreen(tester, operations: operations);
+        await tester.tap(find.text('Redeem a card'));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('payment_link_desktop_scan_button')),
+        );
+        await tester.pumpAndSettle();
+
+        final scanner = find.byType(DesktopPaymentLinkScanScreen);
+        final scannerState = tester.state(scanner);
+        final context = tester.element(scanner);
+        final router = GoRouter.of(context);
+        final container = ProviderScope.containerOf(context);
+        container
+            .read(paymentLinkIntakeProvider.notifier)
+            .receive(secondIncomingLink.toUri().toString());
+        await tester.pumpAndSettle();
+
+        expect(router.state.matchedLocation, '/payment-links/scan');
+        expect(tester.state(scanner), same(scannerState));
+        expect(find.byType(MobileScanner), findsOneWidget);
+        expect(operations.preparedLinks, isEmpty);
+        expect(
+          container
+              .read(paymentLinkIntakeProvider)
+              .pendingLink!
+              .hasSameCanonicalPayload(secondIncomingLink),
+          isTrue,
+        );
+
+        if (completeScan) {
+          tester
+              .widget<PlainQrScannerView>(find.byType(PlainQrScannerView))
+              .onComplete(incomingLink.toUri().toString());
+          await tester.pumpAndSettle();
+          expect(find.text('You’ve received\na gift card!'), findsOneWidget);
+          expect(operations.preparedLinks.map((link) => link.address), [
+            incomingLink.address,
+          ]);
+          expect(
+            container.read(paymentLinkIntakeProvider).pendingLink,
+            isNotNull,
+          );
+          await tester.tap(find.text('Cards'));
+        } else {
+          await tester.tap(find.byType(AppBackLink));
+        }
+        await tester.pumpAndSettle();
+
+        expect(router.state.matchedLocation, '/payment-links');
+        expect(scanner, findsNothing);
+        expect(container.read(externalActionGuardProvider).activeHoldCount, 0);
+        expect(container.read(paymentLinkIntakeProvider).pendingLink, isNull);
+        expect(operations.preparedLinks.map((link) => link.address), [
+          if (completeScan) incomingLink.address,
+          secondIncomingLink.address,
+        ]);
+        expect(find.text('You’ve received\na gift card!'), findsOneWidget);
+        expect(operations.claimedSessions, isEmpty);
+        expect(operations.receivedRecords, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+  }
   testWidgets('Keystone keeps its animated UR decoding with the shared card', (
     tester,
   ) async {

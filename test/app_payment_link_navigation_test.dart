@@ -100,6 +100,65 @@ void main() {
     }
   });
 
+  testWidgets('scheduled Gift navigation yields to the Payment Links scanner', (
+    tester,
+  ) async {
+    final incomingUris = _FakeIncomingUriService();
+    addTearDown(incomingUris.dispose);
+    final router = GoRouter(
+      initialLocation: '/settings',
+      routes: [
+        for (final path in [
+          '/settings',
+          '/payment-links',
+          '/payment-links/scan',
+          '/payment-links-other',
+        ])
+          GoRoute(
+            path: path,
+            builder: (_, _) => Scaffold(body: Text('screen $path')),
+          ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appBootstrapProvider.overrideWithValue(readyPaymentLinkBootstrap),
+          incomingUriServiceProvider.overrideWithValue(incomingUris),
+          syncProvider.overrideWith(FakeSyncNotifier.new),
+        ],
+        child: MaterialApp.router(
+          routerConfig: router,
+          builder: (_, child) =>
+              buildIncomingLinkHostForTest(router: router, child: child!),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.text('screen /settings')),
+    );
+    container
+        .read(paymentLinkIntakeProvider.notifier)
+        .receive(paymentLinkNavigationLink.toUri().toString());
+    // Enter the scanner after the host schedules navigation, before its
+    // post-frame callback runs. The callback must re-check route ownership.
+    router.go('/payment-links/scan');
+    await tester.pumpAndSettle();
+
+    expect(router.state.matchedLocation, '/payment-links/scan');
+    expect(container.read(paymentLinkIntakeProvider).pendingLink, isNotNull);
+
+    // A similar prefix is still a neutral route, so leaving the owned flow
+    // resumes the queued link's normal navigation.
+    router.go('/payment-links-other');
+    await tester.pumpAndSettle();
+    expect(router.state.matchedLocation, '/payment-links');
+    expect(container.read(paymentLinkIntakeProvider).pendingLink, isNotNull);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('shows an error for a rejected Gift Card deep link', (
     tester,
   ) async {

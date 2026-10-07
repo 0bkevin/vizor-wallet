@@ -2126,10 +2126,10 @@ class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
     }
     final location = widget.router.state.matchedLocation;
     // Unlock owns post-authentication navigation. The Payment Links screen
-    // owns intake while it is already visible, including its local wizard.
+    // owns intake while it is already visible, including its wizard and scanner.
     if (location == '/' ||
         location == '/unlock' ||
-        location == '/payment-links' ||
+        _isRouteOrChild(location, '/payment-links') ||
         _isRouteOrChild(location, '/gift')) {
       return;
     }
@@ -2186,7 +2186,7 @@ class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
       final currentLocation = widget.router.state.matchedLocation;
       if (currentLocation == '/' ||
           currentLocation == '/unlock' ||
-          currentLocation == '/payment-links' ||
+          _isRouteOrChild(currentLocation, '/payment-links') ||
           paymentLinkEntryBlockedAtLocation(
             currentLocation,
             paymentRequestCardPresented: _paymentRequestCardPresented,
