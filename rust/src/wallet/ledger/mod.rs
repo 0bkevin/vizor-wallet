@@ -5,6 +5,7 @@
 //! handle for PCZT signing is intentionally avoided in this PoC.
 
 pub(crate) mod apdu;
+pub(crate) mod limits;
 mod operations;
 mod parse;
 mod serializer;
@@ -19,11 +20,6 @@ pub(crate) use operations::{
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod transport;
-
-// Ledger Zcash app 3.9.3 limits. Shielded action limits apply per pool.
-pub(crate) const MAX_TRANSPARENT_INPUTS: usize = 32;
-pub(crate) const MAX_TRANSPARENT_OUTPUTS: usize = 10;
-pub(crate) const MAX_SHIELDED_ACTIONS: usize = 32;
 
 use std::{
     sync::{
