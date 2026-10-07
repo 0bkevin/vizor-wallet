@@ -779,14 +779,9 @@ class _ImportingBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = context.appTheme == AppThemeData.dark;
-    final assetName = isDark
-        ? 'assets/illustrations/home_importing_background_dark.png'
-        : 'assets/illustrations/home_importing_background_light.png';
-
     return Positioned.fill(
       child: Image.asset(
-        assetName,
+        'assets/illustrations/home_importing_background.webp',
         key: const ValueKey('mobile_home_importing_background'),
         fit: BoxFit.cover,
         alignment: Alignment.topCenter,
@@ -1099,7 +1094,10 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
             context,
             ref,
             tx,
-            giftCardActivityIndex.metadataFor(tx),
+            giftCardActivityIndex.metadataFor(
+              tx,
+              transactions: sync.recentTransactions,
+            ),
             privacyModeEnabled: privacyModeEnabled,
           ),
       for (final item in swapItems)
@@ -2417,7 +2415,7 @@ class _MobileRestImage extends StatelessWidget {
                 left: _imageLeft * scale,
                 top: _imageTop * scale,
                 child: Image.asset(
-                  'assets/illustrations/home_rest_character.png',
+                  'assets/illustrations/home_rest_character.webp',
                   key: const ValueKey('mobile_home_rest_image'),
                   width: _imageWidth * scale,
                   height: _imageHeight * scale,
