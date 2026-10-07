@@ -107,7 +107,7 @@ void main() {
     await tester.tap(keyed('payment_link_desktop_scan_button'));
     await tester.pumpAndSettle();
     expect(find.text('Try again'), findsOneWidget);
-    await tester.tap(keyed('payment_link_redeem_paste_button'));
+    await tester.tap(find.text('Try again'));
     await tester.pumpAndSettle();
     expect(find.text('You’ve received\na gift card!'), findsOneWidget);
     expect(calls, 1);

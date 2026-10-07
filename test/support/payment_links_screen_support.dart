@@ -47,6 +47,9 @@ Future<void> loadPaymentLinksTestFonts() async {
     ..addFont(rootBundle.load('assets/fonts/Geist-Medium.ttf'))
     ..addFont(rootBundle.load('assets/fonts/Geist-SemiBold.ttf'));
   await loader.load();
+  final displayLoader = FontLoader('Young Serif')
+    ..addFont(rootBundle.load('assets/fonts/YoungSerif-Regular.ttf'));
+  await displayLoader.load();
 }
 
 Future<void> pumpPaymentLinksScreen(
