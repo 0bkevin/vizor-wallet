@@ -111,7 +111,9 @@ void main() {
             container.read(externalActionGuardProvider).activeHoldCount,
             1,
           );
-          expect(container.read(paymentUriPrefillProvider), isNotNull);
+          // Setup discards external requests rather than replaying them after
+          // the backup write finishes.
+          expect(container.read(paymentUriPrefillProvider), isNull);
 
           if (failSave) {
             account.backupSave!.completeError(StateError('late write failure'));
@@ -124,15 +126,11 @@ void main() {
             0,
           );
           expect(container.read(paymentUriPrefillProvider), isNull);
-          expect(find.byType(PaymentRequestSurface), findsOneWidget);
+          expect(find.byType(PaymentRequestSurface), findsNothing);
           if (failSave) {
             expect(find.byType(SettingsSeedPhraseScreen), findsOneWidget);
             expect(find.text('Couldn’t save that. Try again.'), findsOneWidget);
             if (completeBackup) expect(find.text('abandon'), findsOneWidget);
-            // Dismiss the request through the pane scrim, then retry the write.
-            await tester.tapAt(const Offset(300, 690));
-            await tester.pumpAndSettle();
-            expect(find.byType(PaymentRequestSurface), findsNothing);
             account.backupSave = Completer<void>();
             await tester.tap(action);
             await tester.pump();
@@ -149,13 +147,18 @@ void main() {
             expect(find.text('home-destination'), findsOneWidget);
           } else {
             expect(find.text('home-destination'), findsOneWidget);
-            await tester.tap(find.widgetWithText(AppButton, 'Enter amount'));
-            await tester.pumpAndSettle();
-            expect(find.text('send-destination'), findsOneWidget);
           }
           expect(completeBackup ? account.completed : account.snoozed, [
             'account-2',
           ]);
+          // A fresh request is accepted once setup and its hold have ended,
+          // including after a failed write has been retried.
+          incomingUris.emit('zcash:u1recipient');
+          await tester.pumpAndSettle();
+          expect(find.byType(PaymentRequestSurface), findsOneWidget);
+          await tester.tap(find.widgetWithText(AppButton, 'Enter amount'));
+          await tester.pumpAndSettle();
+          expect(find.text('send-destination'), findsOneWidget);
         },
       );
     }

@@ -305,7 +305,7 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     platform: TargetPlatform.macOS,
   ),
   FigmaCompareScenario(
-    id: 'gift-card-claim-checking',
+    id: 'desktop-gift-card-claim-checking',
     description: 'Discovered Gift Card on the checking surface at 50%',
     builder: buildPaymentLinkReceivedCheckingUseCase,
   ),

@@ -548,18 +548,22 @@ void main() {
       await tester.pump();
       expect(find.text('You’ve received a gift!'), findsNothing);
       final create = keyed('gift_claim_create_a_wallet_to_claim');
+      expect(keyed('payment_link_mobile_loading_card'), findsOneWidget);
+      expect(create, findsNothing);
+      expect(find.text('Claim with an existing wallet'), findsNothing);
+      expect(keyed('gift_claim_close_button'), findsNothing);
+      checking.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('You’ve received a gift!'), findsOneWidget);
+      expect(keyed('payment_link_mobile_loading_card'), findsNothing);
       expect(
         tester
             .widget<AppButton>(
               find.descendant(of: create, matching: find.byType(AppButton)),
             )
             .onPressed,
-        isNull,
+        isNotNull,
       );
-      expect(keyed('gift_claim_close_button'), findsNothing);
-      checking.complete();
-      await tester.pumpAndSettle();
-      expect(find.text('You’ve received a gift!'), findsOneWidget);
       expect(accounts.creationCalls, 0);
     },
   );
