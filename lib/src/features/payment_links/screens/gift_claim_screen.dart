@@ -79,20 +79,24 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
     ref.listenManual(paymentLinkIntakeProvider, (_, next) {
       if (next.pendingLink == null) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Consume only on the visible empty entry. Further links stay queued
-        // while a Card or the wallet setup it owns is open.
-        if (!mounted ||
-            ModalRoute.of(context)?.isCurrent != true ||
-            ref.read(giftClaimFlowProvider) != null ||
-            ref.read(giftClaimSetupReturnProvider) != null) {
-          return;
-        }
-        final pending = ref.read(paymentLinkIntakeProvider).pendingLink;
-        if (pending != null) {
-          ref.read(giftClaimFlowProvider.notifier).open(pending);
-        }
+        _openPendingLink();
       });
     }, fireImmediately: true);
+  }
+
+  void _openPendingLink() {
+    // Open only on the visible empty entry. Further links stay queued while a
+    // Card or the wallet setup it owns is open.
+    if (!mounted ||
+        ModalRoute.of(context)?.isCurrent != true ||
+        ref.read(giftClaimFlowProvider) != null ||
+        ref.read(giftClaimSetupReturnProvider) != null) {
+      return;
+    }
+    final pending = ref.read(paymentLinkIntakeProvider).pendingLink;
+    if (pending != null) {
+      ref.read(giftClaimFlowProvider.notifier).open(pending);
+    }
   }
 
   Future<void> _close() async {
@@ -234,7 +238,12 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
         ref.read(giftClaimFlowProvider.notifier).open(link);
       }
     } finally {
-      if (mounted) setState(() => _reading = false);
+      if (mounted) {
+        setState(() => _reading = false);
+        // Intake events are deferred while the scanner covers this route.
+        // Recheck even when scanning was cancelled and returned no link.
+        _openPendingLink();
+      }
     }
   }
 

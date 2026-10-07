@@ -31,6 +31,8 @@ import 'package:zcash_wallet/src/features/payment_links/services/payment_link_se
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_received_store.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_clipboard.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_scanner_provider.dart';
+import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_intake_provider.dart';
+import 'package:zcash_wallet/src/features/payment_links/screens/gift_claim_screen.dart';
 import 'package:zcash_wallet/src/features/payment_links/screens/desktop_payment_link_scan_screen.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
 import 'package:zcash_wallet/src/providers/app_security_provider.dart';
@@ -42,7 +44,11 @@ import '../../fakes/fake_sync_notifier.dart';
 import '../../fakes/fake_password_input_source.dart';
 import '../../support/payment_link_navigation_support.dart';
 import '../../support/payment_links_screen_support.dart'
-    show incomingLink, FakePaymentLinkClipboard, loadPaymentLinksTestFonts;
+    show
+        incomingLink,
+        secondIncomingLink,
+        FakePaymentLinkClipboard,
+        loadPaymentLinksTestFonts;
 
 Finder keyed(String key) => find.byKey(ValueKey(key));
 
@@ -202,6 +208,60 @@ void main() {
       expect(keyed('gift_desktop_scan_button'), findsOneWidget);
     },
   );
+
+  for (final existing in [false, true]) {
+    for (final completesScan in [false, true]) {
+      testWidgets(
+        'Gift scanner resumes queued intake for ${existing ? "additional" : "first"} account after ${completesScan ? "a QR result" : "cancellation"}',
+        (tester) async {
+          await pump(tester, existing: existing);
+          final router = container.read(_routerProvider);
+          router.go(existing ? '/gift?addAccount=true' : '/gift');
+          await tester.pumpAndSettle();
+          final entry = find.byType(GiftClaimScreen, skipOffstage: false);
+          final entryState = tester.state(entry);
+          await tester.tap(keyed('gift_desktop_scan_button'));
+          await tester.pumpAndSettle();
+
+          container
+              .read(paymentLinkIntakeProvider.notifier)
+              .receive(secondIncomingLink.toUri().toString());
+          await tester.pumpAndSettle();
+          expect(router.state.uri.path, '/gift/scan');
+          expect(tester.state(entry), same(entryState));
+          expect(container.read(giftClaimFlowProvider), isNull);
+          expect(operations.allowLongSyncChecks, isEmpty);
+
+          if (completesScan) {
+            router.pop(incomingLink);
+          } else {
+            await tester.tap(find.byType(AppBackLink));
+          }
+          await tester.pumpAndSettle();
+
+          final flow = container.read(giftClaimFlowProvider);
+          expect(router.state.uri.path, '/gift');
+          expect(tester.state(entry), same(entryState));
+          expect(flow?.phase, GiftClaimPhase.inspected);
+          expect(
+            flow?.link.mnemonic,
+            (completesScan ? incomingLink : secondIncomingLink).mnemonic,
+          );
+          expect(operations.allowLongSyncChecks, [false]);
+          expect(
+            container
+                .read(paymentLinkIntakeProvider)
+                .pendingLink!
+                .hasSameCanonicalPayload(secondIncomingLink),
+            isTrue,
+          );
+          expect(operations.claimedDestinations, isEmpty);
+          expect(accounts.creationCalls, 0);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
 
   Future<void> paste(WidgetTester tester) async {
     await tester.tap(keyed('welcome_redeem_card_button'));
