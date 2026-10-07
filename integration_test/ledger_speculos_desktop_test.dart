@@ -214,7 +214,8 @@ void main() {
         storedFirstAccounts.single.zip32AccountIndex,
         fixture.accountIndex,
       );
-      expect(storedFirstAccounts.single.birthdayHeight, 2500000);
+      // Mainnet imports start scanning after the preceding compiled checkpoint.
+      expect(storedFirstAccounts.single.birthdayHeight, 2490001);
 
       final lightwalletd = _AcceptingLightwalletd();
       await lightwalletd.start();
