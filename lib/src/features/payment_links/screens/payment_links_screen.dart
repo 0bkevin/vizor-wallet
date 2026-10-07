@@ -1022,12 +1022,16 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
       return;
     }
     _amountUsdUnitPrice = price;
+    if (price == null) {
+      // Keep the last exact ZEC amount for switching units. Editing the USD
+      // input without a live price invalidates it in _handleAmountChanged.
+      setState(() {});
+      return;
+    }
     if (_amountUsesMax && _amountZatoshi != null) {
-      if (price != null) {
-        _setAmountControllerText(
-          sendUsdInputTextForZatoshi(_amountZatoshi!, price),
-        );
-      }
+      _setAmountControllerText(
+        sendUsdInputTextForZatoshi(_amountZatoshi!, price),
+      );
       setState(() {});
       return;
     }

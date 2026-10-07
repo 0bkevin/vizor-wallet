@@ -585,6 +585,89 @@ void registerGiftCardAmountCurrencyChecks({required bool mobile}) {
     },
   );
 
+  for (final returnFromReview in [false, true]) {
+    testWidgets('price expiry preserves exact ZEC when switching units from '
+        '${returnFromReview ? 'review' : 'amount'}', (tester) async {
+      final price = _PriceNotifier();
+      final operations = _RecordingOperations();
+      final capture = output.isEmpty || returnFromReview ? null : GlobalKey();
+      await start(
+        tester,
+        price: price,
+        operations: operations,
+        capture: capture,
+      );
+      await enter(tester, '0.12345678');
+      await tester.tap(usd);
+      await tester.pumpAndSettle();
+      expect(input(tester), '12.35');
+      if (returnFromReview) await review(tester);
+
+      price.expirePrice();
+      await tester.pumpAndSettle();
+      if (returnFromReview) {
+        if (mobile) {
+          await tester.tap(find.bySemanticsLabel('Back'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.bySemanticsLabel('Back'));
+        } else {
+          await tester.tap(find.text('Create').first);
+        }
+        await tester.pumpAndSettle();
+      }
+      expect(input(tester), '12.35');
+      expect(find.text('≈ 0.12345678 ZEC'), findsOneWidget);
+      expect(canContinue(tester), isFalse);
+      await captureScreen(tester, capture, 'price-expired-preserved');
+
+      await tester.tap(zec);
+      await tester.pumpAndSettle();
+      expect(input(tester), '0.12345678');
+      expect(canContinue(tester), isTrue);
+      expect(operations.quotedAmounts, [BigInt.from(12345678)]);
+      await captureScreen(tester, capture, 'price-expired-zec-recovery');
+      await review(tester);
+      await tester.tap(confirmButton);
+      await tester.pumpAndSettle();
+      expect(operations.createdAmounts, [BigInt.from(12345678)]);
+    });
+  }
+
+  testWidgets('editing USD without a live price invalidates preserved ZEC', (
+    tester,
+  ) async {
+    final price = _PriceNotifier();
+    final operations = _RecordingOperations();
+    await start(tester, price: price, operations: operations);
+    await tester.tap(usd);
+    await tester.pumpAndSettle();
+    await enter(tester, '50');
+    price.expirePrice();
+    await tester.pumpAndSettle();
+    expect(find.text('≈ 0.5 ZEC'), findsOneWidget);
+
+    await enter(tester, '75');
+    expect(find.text('≈ 0.5 ZEC'), findsNothing);
+    expect(canContinue(tester), isFalse);
+    expect(operations.quotedAmounts, [BigInt.from(50000000)]);
+    price.setPrice(200);
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+    expect(input(tester), '75');
+    expect(find.text('≈ 0.375 ZEC'), findsOneWidget);
+    expect(canContinue(tester), isTrue);
+    expect(operations.quotedAmounts.last, BigInt.from(37500000));
+
+    price.expirePrice();
+    await tester.pumpAndSettle();
+    await enter(tester, '100');
+    await tester.tap(zec);
+    await tester.pumpAndSettle();
+    expect(input(tester), isEmpty);
+    expect(canContinue(tester), isFalse);
+    expect(operations.createdAmounts, isEmpty);
+  });
+
   testWidgets(
     'review freezes ZEC while returning to USD resumes current pricing',
     (tester) async {
