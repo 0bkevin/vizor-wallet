@@ -1557,12 +1557,15 @@ void main() {
         state: PaymentLinkPreviewState.redeemLoading,
       ),
     );
-    expect(tester.getTopLeft(find.text('Checking…')).dy, closeTo(166, 1));
+    expect(
+      tester.getTopLeft(find.text(kPaymentLinkClaimCheckingHeading)).dy,
+      closeTo(114.5, 1),
+    );
     expect(
       tester.getTopLeft(
         find.byKey(const ValueKey('payment_link_loading_card')),
       ),
-      const Offset(492, 251),
+      const Offset(492, 258.5),
     );
     expect(redeemDropZone, findsNothing);
     expect(
