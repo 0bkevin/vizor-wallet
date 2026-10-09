@@ -1708,6 +1708,54 @@ void main() {
     expect(find.text('July 2026'), findsNothing);
   });
 
+  for (final isLedger in [false, true]) {
+    for (final width in [800.0, 1000.0]) {
+      testWidgets(
+        '${isLedger ? 'Ledger' : 'Software'} list entry leaves card actions reachable at ${width}px',
+        (tester) async {
+          await tester.binding.setSurfaceSize(Size(width, 720));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          var qrOpened = false;
+          await _pump(
+            tester,
+            PaymentLinkCardsDesktopView(
+              isLedger: isLedger,
+              sections: [
+                PaymentLinkCardsSection(
+                  label: 'Unused',
+                  cards: [
+                    PaymentLinkCardListRow(
+                      thumbnail: const SizedBox(),
+                      amountText: '0.1 ZEC',
+                      dateText: 'October 7',
+                      showLinkActions: true,
+                      onCopyLink: () {},
+                      onShowQr: () => qrOpened = true,
+                    ),
+                  ],
+                ),
+              ],
+              onBack: () {},
+              onCreate: () {},
+              onRedeem: () {},
+              onCreateMultiple: () {},
+            ),
+          );
+          final entry = find.byKey(
+            const ValueKey('payment_link_create_batch_button'),
+          );
+          final row = find.byType(PaymentLinkCardListRow);
+          expect(tester.getRect(entry).overlaps(tester.getRect(row)), isFalse);
+          await tester.tap(
+            find.byKey(const ValueKey('payment_link_card_qr_action')),
+          );
+          expect(qrOpened, isTrue);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
   testWidgets('cards navigation exposes tab roles and selected state', (
     tester,
   ) async {

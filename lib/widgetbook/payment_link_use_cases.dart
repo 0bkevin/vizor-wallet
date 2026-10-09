@@ -13,6 +13,7 @@ import '../src/core/theme/app_theme.dart';
 import '../src/core/widgets/app_button.dart';
 import '../src/core/widgets/app_icon.dart';
 import '../src/core/widgets/app_profile_picture.dart';
+import '../src/features/ledger/ledger_capability.dart';
 import '../src/features/payment_links/models/vizor_payment_link.dart';
 import '../src/features/payment_links/services/payment_link_service.dart';
 import '../src/features/payment_links/widgets/payment_link_card_flip.dart';
@@ -108,6 +109,58 @@ Widget buildPaymentLinkCreateAmountUseCase(BuildContext context) =>
 
 Widget buildPaymentLinkBatchAmountUseCase(BuildContext context) =>
     const PaymentLinkDesktopPreview(state: PaymentLinkPreviewState.batchAmount);
+
+Widget buildPaymentLinkLedgerEntryUseCase(BuildContext context) => ColoredBox(
+  color: context.colors.background.window,
+  child: PaymentLinksHomeDesktopView(
+    isLedger: true,
+    illustration: Image.asset(
+      'assets/illustrations/payment_links/payment_link_empty_card.webp',
+      width: 243,
+      height: 162,
+    ),
+    onBack: _noop,
+    onShowHelp: _noop,
+    onCreate: _noop,
+    onCreateMultiple: _noop,
+    onRedeem: _noop,
+  ),
+);
+
+Widget buildPaymentLinkLedgerBatchUseCase(BuildContext context) => ColoredBox(
+  color: context.colors.background.window,
+  child: const _PaymentLinkBulkPreview(isLedger: true, initialCount: 4),
+);
+
+Widget buildPaymentLinkLedgerBatchEmptyUseCase(BuildContext context) =>
+    ColoredBox(
+      color: context.colors.background.window,
+      child: const _PaymentLinkBulkPreview(
+        isLedger: true,
+        initialCount: 2,
+        initialAmount: '',
+      ),
+    );
+
+Widget buildPaymentLinkLedgerBatchPreparingUseCase(BuildContext context) =>
+    ColoredBox(
+      color: context.colors.background.window,
+      child: const _PaymentLinkBulkPreview(
+        isLedger: true,
+        initialCount: 4,
+        initialPreparing: true,
+      ),
+    );
+
+Widget buildPaymentLinkLedgerBatchErrorUseCase(BuildContext context) =>
+    ColoredBox(
+      color: context.colors.background.window,
+      child: const _PaymentLinkBulkPreview(
+        isLedger: true,
+        initialCount: 4,
+        error: 'Unable to calculate the fee. Try again.',
+      ),
+    );
 
 Widget buildPaymentLinkBatchEmptyUseCase(BuildContext context) =>
     const PaymentLinkDesktopPreview(state: PaymentLinkPreviewState.batchEmpty);
@@ -800,6 +853,8 @@ class _PaymentLinkBulkPreview extends StatefulWidget {
     this.initialPreparing = false,
     this.initialMixed = false,
     this.initialMessage = '',
+    this.isLedger = false,
+    this.error,
   });
 
   final bool initialReviewing;
@@ -808,6 +863,8 @@ class _PaymentLinkBulkPreview extends StatefulWidget {
   final bool initialPreparing;
   final bool initialMixed;
   final String initialMessage;
+  final bool isLedger;
+  final String? error;
 
   @override
   State<_PaymentLinkBulkPreview> createState() =>
@@ -835,7 +892,8 @@ class _PaymentLinkBulkPreviewState extends State<_PaymentLinkBulkPreview> {
   @override
   Widget build(BuildContext context) => PaymentLinkBulkDesktopFlow(
     count: _count,
-    maxCount: 50,
+    maxCount: widget.isLedger ? kLedgerMaxExternalShieldedOutputs : 50,
+    isLedger: widget.isLedger,
     amountController: _amount,
     messageController: _message,
     artwork: _artwork,
@@ -846,7 +904,8 @@ class _PaymentLinkBulkPreviewState extends State<_PaymentLinkBulkPreview> {
           : null,
     ),
     spendable: BigInt.from(_count > 30 ? 1000000000 : 400000000),
-    quote: widget.initialPreparing || _amount.text.isEmpty
+    quote:
+        widget.initialPreparing || widget.error != null || _amount.text.isEmpty
         ? null
         : PaymentLinkBatchQuote(
             sourceAccountUuid: 'preview-account',
@@ -858,7 +917,8 @@ class _PaymentLinkBulkPreviewState extends State<_PaymentLinkBulkPreview> {
     reviewing: _reviewing,
     submitting: false,
     retrySaving: false,
-    error: null,
+    error: widget.error,
+    onRetry: widget.error == null ? null : _noop,
     onCountChanged: (count) => setState(() => _count = count),
     onAmountChanged: (_) => setState(() {}),
     onMessageChanged: (_) => setState(() {}),
@@ -866,7 +926,8 @@ class _PaymentLinkBulkPreviewState extends State<_PaymentLinkBulkPreview> {
       _artwork = artwork;
       _mixed = null;
     }),
-    onReview: widget.initialPreparing || _amount.text.isEmpty
+    onReview:
+        widget.initialPreparing || widget.error != null || _amount.text.isEmpty
         ? null
         : () => setState(() => _reviewing = true),
     onEdit: () => setState(() => _reviewing = false),
