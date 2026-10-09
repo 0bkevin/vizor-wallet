@@ -6,6 +6,7 @@ import 'package:zcash_wallet/src/features/payment_links/providers/gift_card_chec
 import 'package:zcash_wallet/src/rust/api/sync.dart' as rust_sync;
 
 import 'package:zcash_wallet/src/features/payment_links/providers/gift_card_entry_price_provider.dart';
+import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_scanner_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/widgets/mobile/payment_link_scan_sheet.dart';
 import 'package:zcash_wallet/src/features/payment_links/widgets/mobile/payment_link_mobile_views.dart';
 import 'dart:io';
@@ -60,6 +61,7 @@ import '../../support/payment_links_screen_support.dart'
     show
         FakePaymentLinkClipboard,
         incomingLink,
+        secondIncomingLink,
         loadPaymentLinksTestFonts,
         pumpPaymentLinksScreen;
 
@@ -1133,6 +1135,43 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(PaymentLinkLoadingMobileCard), findsNothing);
   });
+
+  for (final completesScan in [false, true]) {
+    testWidgets(
+      'mobile Gift scanner resumes queued intake after ${completesScan ? "a QR result" : "cancellation"}',
+      (tester) async {
+        final container = await pumpWelcome(tester);
+        await tester.tap(keyed('mobile_welcome_redeem_card'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Scan QR code'));
+        await tester.pumpAndSettle();
+        final sheet = find.byType(PaymentLinkScanSheet);
+        expect(sheet, findsOneWidget);
+
+        container
+            .read(paymentLinkIntakeProvider.notifier)
+            .receive(secondIncomingLink.toUri().toString());
+        await tester.pumpAndSettle();
+        expect(container.read(giftClaimFlowProvider), isNull);
+        expect(operations.allowLongSyncChecks, isEmpty);
+        Navigator.of(
+          tester.element(sheet),
+        ).pop(completesScan ? incomingLink : null);
+        await tester.pumpAndSettle();
+
+        final flow = container.read(giftClaimFlowProvider);
+        expect(location(tester), '/gift');
+        expect(flow?.phase, GiftClaimPhase.inspected);
+        expect(
+          flow?.link.mnemonic,
+          (completesScan ? incomingLink : secondIncomingLink).mnemonic,
+        );
+        expect(operations.allowLongSyncChecks, [false]);
+        expect(operations.claimedDestinations, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   testWidgets('Back consumes the deep link before asynchronous card cleanup', (
     tester,
