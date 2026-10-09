@@ -70,6 +70,7 @@ Future<void> pumpPaymentLinksScreen(
   BigInt? spendableBalance,
   FakeSyncNotifier? syncNotifier,
   ZecMarketDataSource? marketDataSource,
+  ZecHomeMarketDataNotifier? marketDataNotifier,
   bool? pricingEnabled,
   PrivacyModeNotifier? privacyNotifier,
   Map<String, GiftCardUsage>? giftCardUsages,
@@ -118,6 +119,8 @@ Future<void> pumpPaymentLinksScreen(
           marketDataSource ?? const _PaymentLinksTestMarketDataSource(),
         ),
         zecMarketDataCacheProvider.overrideWithValue(FakeZecMarketDataCache()),
+        if (marketDataNotifier != null)
+          zecHomeMarketDataStateProvider.overrideWith(() => marketDataNotifier),
         if (qrImageSaver != null)
           paymentLinkQrImageSaverProvider.overrideWithValue(qrImageSaver),
         if (qrShareHandler != null)

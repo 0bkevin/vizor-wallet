@@ -723,10 +723,10 @@ void main() {
       );
 
       await tester.tap(
-        find.byKey(const ValueKey('payment_link_interactive_amount_editor')),
+        find.byKey(const ValueKey('payment_link_amount_editor')),
       );
       await tester.enterText(
-        find.byKey(const ValueKey('payment_link_interactive_amount_editor')),
+        find.byKey(const ValueKey('payment_link_amount_editor')),
         '2.5',
       );
       await tester.pump();
@@ -734,9 +734,7 @@ void main() {
       expect(
         tester
             .widget<EditableText>(
-              find.byKey(
-                const ValueKey('payment_link_interactive_amount_editor'),
-              ),
+              find.byKey(const ValueKey('payment_link_amount_editor')),
             )
             .controller
             .text,
@@ -766,10 +764,10 @@ void main() {
       await tester.pump(kPaymentLinkPreviewFiatDelay);
       await tester.pump();
 
-      expect(find.text(r'$680.00'), findsOneWidget);
+      expect(find.text(r'≈ $625.00'), findsOneWidget);
       for (final amount in ['3', '0', '2.5', '', '2.5']) {
         await tester.enterText(
-          find.byKey(const ValueKey('payment_link_interactive_amount_editor')),
+          find.byKey(const ValueKey('payment_link_amount_editor')),
           amount,
         );
         await tester.pump();
@@ -777,7 +775,7 @@ void main() {
           find.byKey(const ValueKey('payment_link_fiat_loading_placeholder')),
           findsNothing,
         );
-        if (amount == '2.5') expect(find.text(r'$680.00'), findsOneWidget);
+        if (amount == '2.5') expect(find.text(r'≈ $625.00'), findsOneWidget);
       }
       expect(
         find.byKey(const ValueKey('payment_link_fiat_loading_placeholder')),
@@ -790,8 +788,23 @@ void main() {
         isNotNull,
       );
 
+      await tester.tap(
+        find.byKey(const ValueKey('payment_link_amount_currency_usd')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<EditableText>(
+              find.byKey(const ValueKey('payment_link_amount_editor')),
+            )
+            .controller
+            .text,
+        '625.00',
+      );
+      expect(find.text('≈ 2.5 ZEC'), findsOneWidget);
+
       await tester.enterText(
-        find.byKey(const ValueKey('payment_link_interactive_amount_editor')),
+        find.byKey(const ValueKey('payment_link_amount_editor')),
         '',
       );
       await tester.pump();
@@ -818,12 +831,17 @@ void main() {
       disableAnimations: false,
     );
 
-    final editor = find.byKey(
-      const ValueKey('payment_link_interactive_amount_editor'),
-    );
+    final editor = find.byKey(const ValueKey('payment_link_amount_editor'));
     expect(tester.widget<EditableText>(editor).controller.text, '1');
     expect(tester.widget<EditableText>(editor).focusNode.hasFocus, isTrue);
-    expect(find.text('ZEC'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('payment_link_amount_currency_zec')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('payment_link_amount_currency_usd')),
+      findsOneWidget,
+    );
   });
 
   for (final reducedMotion in [false, true]) {
