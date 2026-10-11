@@ -20,6 +20,28 @@ void main() {
       expect(display.visible, isTrue);
     });
 
+    test('keeps funds a pending spend holds, as the total does', () {
+      final reserved = TransparentBalanceDisplay.of(
+        SyncState(transparentLockedBalance: BigInt.from(4)),
+      );
+      expect(reserved.text(_format), '4zat');
+      expect(reserved.visible, isTrue);
+
+      final state = SyncState(
+        transparentBalance: BigInt.from(5),
+        transparentPendingBalance: BigInt.from(2),
+        transparentLockedBalance: BigInt.from(4),
+        totalBalance: BigInt.from(11),
+      );
+      expect(TransparentBalanceDisplay.of(state).amount, BigInt.from(11));
+      // A demoted read keeps the same amount as last known.
+      final demoted = state.carryingTransparentAuthority(
+        privatePolicyMayApply: true,
+        crossesTip: false,
+      );
+      expect(TransparentBalanceDisplay.of(demoted).amount, BigInt.from(11));
+    });
+
     test('hides a current zero balance', () {
       expect(TransparentBalanceDisplay.of(SyncState()).visible, isFalse);
     });

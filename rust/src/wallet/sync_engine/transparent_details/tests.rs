@@ -724,10 +724,12 @@ async fn private_required_public_enhance_only_on_consent() {
 
     let (path, url, txid) = (fixture.path.clone(), lwd.url.clone(), *tx.txid().as_ref());
     let account = fixture.account;
-    tokio::task::spawn_blocking(move || super::enhance_publicly(&path, MAIN, &url, account, txid))
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::task::spawn_blocking(move || {
+        super::enhance_publicly(&path, MAIN, &url, account, txid, super::public_load_epoch())
+    })
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(lwd.count("/GetTransaction"), 1);
     assert_eq!(paths(&service), ["/v1/txid/init"], "no private request");
     let Some(TransparentDisplayView::Available(details)) = view(&fixture, &tx.txid()) else {
@@ -789,7 +791,7 @@ async fn public_enhance_does_not_recreate_a_reset_wallet() {
     let (path, url, txid) = (fixture.path.clone(), lwd.url.clone(), *tx.txid().as_ref());
     let account = fixture.account;
     let result = tokio::task::spawn_blocking(move || {
-        super::enhance_publicly(&path, MAIN, &url, account, txid)
+        super::enhance_publicly(&path, MAIN, &url, account, txid, super::public_load_epoch())
     })
     .await
     .unwrap();
@@ -816,6 +818,7 @@ async fn public_enhance_api_rejects_missing_storage_before_dispatch() {
             url,
             uuid::Uuid::nil().to_string(),
             hex::encode([0xab; 32]),
+            crate::api::sync::public_transaction_load_epoch(),
         )
     })
     .await
@@ -840,6 +843,7 @@ async fn public_enhance_sends_nothing_for_a_transaction_the_account_does_not_hol
             url,
             uuid,
             hex::encode([0xcd; 32]),
+            crate::api::sync::public_transaction_load_epoch(),
         )
     })
     .await
@@ -878,7 +882,7 @@ async fn public_enhance_rejects_a_second_connection_policy_change() {
     let (path, url, txid) = (fixture.path.clone(), lwd.url.clone(), *tx.txid().as_ref());
     let account = fixture.account;
     let result = tokio::task::spawn_blocking(move || {
-        super::enhance_publicly(&path, MAIN, &url, account, txid)
+        super::enhance_publicly(&path, MAIN, &url, account, txid, super::public_load_epoch())
     })
     .await
     .unwrap();
@@ -916,12 +920,48 @@ async fn a_cancelled_public_enhance_stores_nothing() {
     let (path, url, txid) = (fixture.path.clone(), lwd.url.clone(), *tx.txid().as_ref());
     let account = fixture.account;
     let result = tokio::task::spawn_blocking(move || {
-        super::enhance_publicly(&path, MAIN, &url, account, txid)
+        super::enhance_publicly(&path, MAIN, &url, account, txid, super::public_load_epoch())
     })
     .await
     .unwrap();
     assert_eq!(lwd.count("/GetTransaction"), 1);
     assert!(result.is_err(), "a cancelled load succeeded");
+    assert_eq!(
+        count(
+            &fixture.path,
+            "SELECT COUNT(*) FROM transactions WHERE raw IS NOT NULL"
+        ),
+        0
+    );
+}
+
+/// A lock that lands after the app began a public load but before the load
+/// reached Rust still cancels it: a load from an earlier epoch sends nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_public_enhance_from_a_cancelled_epoch_sends_nothing() {
+    let fixture = wallet();
+    let tx = utxo_receipt(&fixture, 0xaf, TOP - 1);
+    let mut bytes = Vec::new();
+    tx.write(&mut bytes).unwrap();
+    let lwd = CapturingLwd::start_serving(
+        vec![(*tx.txid().as_ref(), bytes, u64::from(TOP - 1))],
+        u64::from(TOP),
+        |_| {},
+    )
+    .await;
+    let (path, url, txid) = (fixture.path.clone(), lwd.url.clone(), *tx.txid().as_ref());
+    let account = fixture.account;
+    // Any epoch but the current one is one a cancellation has since ended;
+    // moving the shared epoch here would cancel concurrent tests' loads.
+    let earlier = super::public_load_epoch().wrapping_sub(1);
+    let result = tokio::task::spawn_blocking(move || {
+        super::enhance_publicly(&path, MAIN, &url, account, txid, earlier)
+    })
+    .await
+    .unwrap();
+    assert!(result.is_err(), "a load from a cancelled epoch succeeded");
+    assert_eq!(lwd.count("/GetTransaction"), 0);
+    assert_eq!(lwd.count("/GetLatestBlock"), 0);
     assert_eq!(
         count(
             &fixture.path,
@@ -944,8 +984,9 @@ async fn a_public_enhance_waiting_for_the_route_ends_when_cancelled() {
     crate::network_privacy::begin_tor_enable();
     let (path, url, txid) = (fixture.path.clone(), lwd.url.clone(), *tx.txid().as_ref());
     let account = fixture.account;
-    let load =
-        tokio::task::spawn_blocking(move || super::enhance_publicly(&path, MAIN, &url, account, txid));
+    let load = tokio::task::spawn_blocking(move || {
+        super::enhance_publicly(&path, MAIN, &url, account, txid, super::public_load_epoch())
+    });
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!load.is_finished(), "the load waits for the route");
 
@@ -1003,7 +1044,7 @@ async fn public_enhance_does_not_store_into_a_replacement_with_the_same_accounts
     let (path, url, txid) = (fixture.path.clone(), lwd.url.clone(), *tx.txid().as_ref());
     let account = fixture.account;
     let result = tokio::task::spawn_blocking(move || {
-        super::enhance_publicly(&path, MAIN, &url, account, txid)
+        super::enhance_publicly(&path, MAIN, &url, account, txid, super::public_load_epoch())
     })
     .await
     .unwrap();

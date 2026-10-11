@@ -328,9 +328,17 @@ void main() {
     expect(find.text(kPrivateQueriesSettingsCopy), findsOneWidget);
   });
 
-  for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+  for (final (platform, copy) in [
+    (
+      TargetPlatform.iOS,
+      '$kPrivateQueriesSettingsCopy While on, migration confirmations are '
+          'checked only when Vizor is open.',
+    ),
+    (TargetPlatform.android, kPrivateQueriesSettingsCopy),
+  ]) {
     testWidgets(
-      'private queries uses the shared settings copy on ${platform.name}',
+      'private queries uses the shared settings copy on ${platform.name}, '
+      'noting foreground-only migration confirmations on iOS',
       (tester) async {
         debugDefaultTargetPlatformOverride = platform;
         addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -340,7 +348,7 @@ void main() {
           const ValueKey('mobile_settings_enhance_pir_description'),
         );
         await tester.scrollUntilVisible(note, 200);
-        expect(tester.widget<Text>(note).data, kPrivateQueriesSettingsCopy);
+        expect(tester.widget<Text>(note).data, copy);
         debugDefaultTargetPlatformOverride = null;
       },
     );

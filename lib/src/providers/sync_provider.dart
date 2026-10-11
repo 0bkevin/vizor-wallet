@@ -3918,10 +3918,10 @@ final syncProvider = AsyncNotifierProvider<SyncNotifier, SyncState>(
   () => SyncNotifier(),
 );
 
-/// Counts post-sync follow-ups that changed wallet data after a sync
-/// completed, published by [SyncNotifier]. Open receipts reload on each:
-/// a follow-up can change transactions outside the ten recent ones, and it
-/// does not complete the sync again.
+/// Counts wallet data changes that do not complete a sync: post-sync
+/// follow-ups published by [SyncNotifier], and a "Load publicly" result the
+/// user asked for. Open receipts and Activity feeds reload on each: either
+/// can change transactions outside the ten recent ones.
 class SyncFollowupNotifier extends Notifier<int> {
   @override
   int build() => 0;

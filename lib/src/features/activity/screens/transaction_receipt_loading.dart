@@ -7,14 +7,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../main.dart' show log;
 import '../../../core/storage/wallet_paths.dart';
 import '../../../providers/account_provider.dart';
-import '../../../providers/app_security_provider.dart';
 import '../../../providers/enhance_pir_provider.dart';
-import '../../../providers/public_details_loads_provider.dart';
 import '../../../providers/rpc_endpoint_provider.dart';
 import '../../../providers/sync_provider.dart';
 import '../../../rust/api/sync.dart' as rust_sync;
 import '../../payment_links/services/payment_link_transaction_matching.dart';
 import '../gift_card_activity_index.dart';
+import '../public_details_load.dart';
 import '../transaction_completeness.dart';
 import '../widgets/public_details_lookup_dialog.dart';
 
@@ -464,26 +463,11 @@ mixin TransactionReceiptLoading<W extends TransactionReceiptScreen>
       if (lookup != null) {
         await lookup(tx);
       } else {
-        final endpoint = ref.read(rpcEndpointProvider);
-        // A lock cancels the load and wallet deletion waits for it, so it
-        // never runs on, or stores into, a wallet the user has left.
-        if (ref.read(appSecurityProvider).requiresUnlock) {
-          throw StateError('The wallet is locked.');
-        }
-        final ran = await ref.read(publicDetailsLoadsProvider).run(() async {
-          // Never create a wallet database name for a load.
-          final dbPath = await getExistingWalletDbPath();
-          if (dbPath == null) throw StateError('The wallet is unavailable.');
-          if (accountUuid == null) throw StateError('No account is active.');
-          await rust_sync.enhanceTransactionPublicly(
-            dbPath: dbPath,
-            network: endpoint.networkName,
-            lightwalletdUrl: endpoint.lightwalletdUrl,
-            accountUuid: accountUuid,
-            txidHex: tx.txidHex,
-          );
-        });
-        if (!ran) throw StateError('The wallet is changing.');
+        await loadTransactionDetailsPublicly(
+          ref.read,
+          accountUuid: accountUuid,
+          txidHex: tx.txidHex,
+        );
       }
       loaded = true;
     } catch (e) {

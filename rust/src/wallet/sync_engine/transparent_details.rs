@@ -711,6 +711,17 @@ static PUBLIC_LOADS: std::sync::LazyLock<
     >,
 > = std::sync::LazyLock::new(Default::default);
 static NEXT_PUBLIC_LOAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Moved by every [`cancel_public_loads`], under the [`PUBLIC_LOADS`] lock.
+static PUBLIC_LOAD_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The cancellation epoch a public load registered now belongs to. The app
+/// reads it when the user's load begins, before any asynchronous step, and
+/// passes it to [`enhance_publicly`], so a cancellation between that moment
+/// and the load reaching Rust still stops it.
+pub(crate) fn public_load_epoch() -> u64 {
+    let _loads = public_loads();
+    PUBLIC_LOAD_EPOCH.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 /// One [`enhance_publicly`] in flight, registered so a lock or a destructive
 /// wallet change can cancel it ([`cancel_public_loads`]).
@@ -720,10 +731,14 @@ struct PublicLoad {
 }
 
 impl PublicLoad {
-    fn start(db_path: &str) -> Self {
+    /// Registers a load that began in `epoch`; it starts cancelled when a
+    /// [`cancel_public_loads`] has run since.
+    fn start(db_path: &str, epoch: u64) -> Self {
         let id = NEXT_PUBLIC_LOAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        public_loads().insert(id, (db_path.to_owned(), cancelled.clone()));
+        let mut loads = public_loads();
+        let stale = PUBLIC_LOAD_EPOCH.load(std::sync::atomic::Ordering::SeqCst) != epoch;
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(stale));
+        loads.insert(id, (db_path.to_owned(), cancelled.clone()));
         Self { id, cancelled }
     }
 
@@ -747,11 +762,14 @@ fn public_loads() -> std::sync::MutexGuard<
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Cancels every public load in flight: one still connecting sends nothing,
-/// and none stores what it receives. For a lock or sign-out, and before an
-/// account or the wallet is deleted.
+/// Cancels every public load in flight, including one that began in an
+/// earlier epoch and has not registered yet: one still connecting sends
+/// nothing, and none stores what it receives. For a lock or sign-out, and
+/// before an account or the wallet is deleted.
 pub(crate) fn cancel_public_loads() {
-    for (_, cancelled) in public_loads().values() {
+    let loads = public_loads();
+    PUBLIC_LOAD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    for (_, cancelled) in loads.values() {
         cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -785,13 +803,15 @@ pub(crate) fn cancel_public_loads_at(db_path: &str) {
 /// validation and storage share one wallet transaction, including the final
 /// read that checks whether the wallet accepted the transaction.
 /// [`cancel_public_loads`] stops it before the request, or discards what it
-/// received.
+/// received; one run since `cancel_epoch` ([`public_load_epoch`]) stops it
+/// before it opens the wallet.
 pub(crate) fn enhance_publicly(
     db_path: &str,
     network: WalletNetwork,
     lightwalletd_url: &str,
     account: AccountUuid,
     txid: [u8; 32],
+    cancel_epoch: u64,
 ) -> Result<(), String> {
     use crate::wallet::db::{
         open_existing_wallet_db_with_timeout, with_wallet_db_write_lock, WALLET_DB_BUSY_TIMEOUT,
@@ -799,7 +819,10 @@ pub(crate) fn enhance_publicly(
     use zcash_client_backend::data_api::transparent_ledger::TransparentDetailRead;
     const CANCELLED: &str = "the lookup was cancelled; nothing was stored";
     let txid = TxId::from_bytes(txid);
-    let load = PublicLoad::start(db_path);
+    let load = PublicLoad::start(db_path, cancel_epoch);
+    if load.cancelled() {
+        return Err(CANCELLED.to_owned());
+    }
     let file = same_file::Handle::from_path(db_path)
         .map_err(|_| "the wallet is unavailable".to_owned())?;
     let same_file = || {

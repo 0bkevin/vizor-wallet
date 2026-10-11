@@ -1096,19 +1096,30 @@ void prioritizeTransparentDetails({
 /// so the app calls it only from an explicit, disclosed user action, never
 /// automatically, and it runs whatever the transparent policy is. Rust sends
 /// nothing unless `account_uuid` holds a transparent part of the transaction.
+/// `cancel_epoch` is [`public_transaction_load_epoch`] read when the user's
+/// load began: a [`cancel_public_transaction_loads`] since then stops the load
+/// before it opens the wallet, even one made before this call reached Rust.
 Future<void> enhanceTransactionPublicly({
   required String dbPath,
   required String network,
   required String lightwalletdUrl,
   required String accountUuid,
   required String txidHex,
+  required BigInt cancelEpoch,
 }) => RustLib.instance.api.crateApiSyncEnhanceTransactionPublicly(
   dbPath: dbPath,
   network: network,
   lightwalletdUrl: lightwalletdUrl,
   accountUuid: accountUuid,
   txidHex: txidHex,
+  cancelEpoch: cancelEpoch,
 );
+
+/// The cancellation epoch for a public load beginning now, to pass to
+/// [`enhance_transaction_publicly`]. Read synchronously when the load
+/// registers, before any asynchronous step.
+BigInt publicTransactionLoadEpoch() =>
+    RustLib.instance.api.crateApiSyncPublicTransactionLoadEpoch();
 
 /// Cancels every [`enhance_transaction_publicly`] in flight: one still
 /// connecting sends nothing, and none stores what it receives. The app calls

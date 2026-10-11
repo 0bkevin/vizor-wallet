@@ -9,9 +9,12 @@ class TransparentBalanceDisplay {
 
   factory TransparentBalanceDisplay.of(SyncState sync) {
     return switch (sync.transparentAuthority) {
+      // Funds a pending spend holds stay in the row, as in the total.
       rust_sync.TransparentBalanceAuthority.current =>
         TransparentBalanceDisplay._(
-          sync.transparentBalance + sync.transparentPendingBalance,
+          sync.transparentBalance +
+              sync.transparentPendingBalance +
+              sync.transparentLockedBalance,
           rust_sync.TransparentBalanceAuthority.current,
         ),
       rust_sync.TransparentBalanceAuthority.lastKnown =>

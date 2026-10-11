@@ -2509,6 +2509,26 @@ void main() {
     expect(find.text('Shield'), findsOneWidget);
   });
 
+  testWidgets('keeps transparent funds a pending spend holds in the tray', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        _syncedState(
+          orchardBalance: BigInt.from(14312000000),
+        ).copyWith(transparentLockedBalance: BigInt.from(242000000)),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('mobile_home_transparent_balance_strip')),
+      findsOneWidget,
+    );
+    expect(find.text('Transparent: 2.42 ZEC'), findsOneWidget);
+  });
+
   testWidgets('shows a stopped recovery with its reason on tap', (
     tester,
   ) async {

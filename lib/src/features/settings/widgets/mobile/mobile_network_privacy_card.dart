@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -142,7 +143,9 @@ class MobileNetworkPrivacyCard extends ConsumerWidget {
           if (enhancePirAvailable) const SizedBox(height: AppSpacing.sm),
           if (enhancePirAvailable)
             Text(
-              kPrivateQueriesSettingsCopy,
+              // iOS background migration tracking cannot run privately, so
+              // it stays off while this is on; say where confirmations happen.
+              privateQueriesMobileSettingsCopy(defaultTargetPlatform),
               key: const ValueKey('mobile_settings_enhance_pir_description'),
               style: AppTypography.bodyMedium.copyWith(
                 color: colors.text.secondary,

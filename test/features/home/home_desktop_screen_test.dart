@@ -742,6 +742,27 @@ void main() {
     expect(find.text('0'), findsNothing);
   });
 
+  testWidgets('home desktop keeps transparent funds a pending spend holds', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _appHarness(
+        '/home',
+        syncState: SyncState(
+          accountUuid: 'account-1',
+          hasAccountScopedData: true,
+          orchardBalance: BigInt.from(44_291_641),
+          transparentLockedBalance: BigInt.from(12_345_678),
+          spendableBalance: BigInt.from(44_291_641),
+          totalBalance: BigInt.from(56_637_319),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Transparent: 0.12345 ZEC'), findsOneWidget);
+  });
+
   testWidgets('home desktop uses compact balance precision for long decimals', (
     tester,
   ) async {

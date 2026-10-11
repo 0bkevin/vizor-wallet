@@ -3244,12 +3244,16 @@ pub fn prioritize_transparent_details(db_path: String, txid_hex: String) -> Resu
 /// so the app calls it only from an explicit, disclosed user action, never
 /// automatically, and it runs whatever the transparent policy is. Rust sends
 /// nothing unless `account_uuid` holds a transparent part of the transaction.
+/// `cancel_epoch` is [`public_transaction_load_epoch`] read when the user's
+/// load began: a [`cancel_public_transaction_loads`] since then stops the load
+/// before it opens the wallet, even one made before this call reached Rust.
 pub fn enhance_transaction_publicly(
     db_path: String,
     network: String,
     lightwalletd_url: String,
     account_uuid: String,
     txid_hex: String,
+    cancel_epoch: u64,
 ) -> Result<(), String> {
     catch(|| {
         // Migration may create a database a reset just deleted. This explicit
@@ -3266,8 +3270,17 @@ pub fn enhance_transaction_publicly(
             &lightwalletd_url,
             account,
             txid,
+            cancel_epoch,
         )
     })
+}
+
+/// The cancellation epoch for a public load beginning now, to pass to
+/// [`enhance_transaction_publicly`]. Read synchronously when the load
+/// registers, before any asynchronous step.
+#[frb(sync)]
+pub fn public_transaction_load_epoch() -> u64 {
+    sync_engine::transparent_details::public_load_epoch()
 }
 
 /// Cancels every [`enhance_transaction_publicly`] in flight: one still
