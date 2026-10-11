@@ -184,13 +184,18 @@ bool offersPublicDetailsLookup(rust_sync.TransactionDetail? detail) =>
 const kTransparentDetailsPollInterval = Duration(seconds: 5);
 
 /// Whether [detail]'s transparent outputs may still arrive, so a receipt
-/// keeps re-reading it and asks for it to be looked up first.
-bool transparentDetailsAwaited(rust_sync.TransactionDetail? detail) =>
-    switch (detail?.transparentDetailsState) {
-      rust_sync.TransparentDetailsState.pending ||
-      rust_sync.TransparentDetailsState.unavailable => true,
-      _ => false,
-    };
+/// keeps re-reading it and asks for it to be looked up first. A failed
+/// lookup is worth waiting on only with Private queries on, where the
+/// private service may answer later; with it off the receipt stops there,
+/// as it always has.
+bool transparentDetailsAwaited(
+  rust_sync.TransactionDetail? detail, {
+  required bool privateQueriesEnabled,
+}) => switch (detail?.transparentDetailsState) {
+  rust_sync.TransparentDetailsState.pending => true,
+  rust_sync.TransparentDetailsState.unavailable => privateQueriesEnabled,
+  _ => false,
+};
 
 /// Names the recipient of a send the account recorded no recipient for.
 const kUnknownRecipientText = 'Unknown recipient';

@@ -8,6 +8,7 @@ import '../../../../main.dart' show log;
 import '../../../core/storage/wallet_paths.dart';
 import '../../../providers/account_provider.dart';
 import '../../../providers/app_security_provider.dart';
+import '../../../providers/enhance_pir_provider.dart';
 import '../../../providers/public_details_loads_provider.dart';
 import '../../../providers/rpc_endpoint_provider.dart';
 import '../../../providers/sync_provider.dart';
@@ -355,7 +356,10 @@ mixin TransactionReceiptLoading<W extends TransactionReceiptScreen>
   /// until they do.
   void _followTransparentDetails() {
     final detail = matchingReceiptDetailFor(_transaction);
-    if (!transparentDetailsAwaited(detail)) {
+    if (!transparentDetailsAwaited(
+      detail,
+      privateQueriesEnabled: ref.read(enhancePirProvider),
+    )) {
       _transparentDetailsPoll?.cancel();
       _transparentDetailsPoll = null;
       return;

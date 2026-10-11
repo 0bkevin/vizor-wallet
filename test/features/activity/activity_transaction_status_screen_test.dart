@@ -618,7 +618,9 @@ void main() {
     expect(find.text('Show full address'), findsNothing);
   });
 
-  testWidgets('shows the recorded network fee for a receive', (tester) async {
+  testWidgets('a receive shows no network fee, even when it is known', (
+    tester,
+  ) async {
     await _pumpScreen(
       tester,
       args: ActivityTransactionStatusArgs(
@@ -632,31 +634,9 @@ void main() {
       ),
     );
 
-    expect(find.text('Network fee'), findsOneWidget);
-    expect(find.text('0.0001 ZEC'), findsOneWidget);
-  });
-
-  testWidgets('masks the recorded receive fee in privacy mode', (tester) async {
-    await _pumpScreen(
-      tester,
-      privacyEnabled: true,
-      args: ActivityTransactionStatusArgs(
-        txidHex: _txidHex,
-        txKind: 'received',
-        initialTransaction: _transaction(
-          txKind: 'received',
-          fee: BigInt.from(10000),
-        ),
-        initialDetail: _detail(txKind: 'received'),
-      ),
-    );
-    expect(find.text('Network fee'), findsOneWidget);
+    expect(find.byType(ReceivedReceiptView), findsOneWidget);
+    expect(find.text('Network fee'), findsNothing);
     expect(find.text('0.0001 ZEC'), findsNothing);
-    final receipt = tester.widget<ReceivedReceiptView>(
-      find.byType(ReceivedReceiptView),
-    );
-    expect(receipt.feeText, isNotNull);
-    expect(receipt.feeText, isNot('--'));
   });
 
   for (final feeState in [

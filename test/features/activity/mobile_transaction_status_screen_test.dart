@@ -390,50 +390,22 @@ void main() {
     },
   );
 
-  for (final privacyEnabled in [false, true]) {
-    testWidgets(
-      'ordinary receive shows a known fee with privacy=$privacyEnabled',
-      (tester) async {
-        await tester.binding.setSurfaceSize(const Size(393, 1000));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        await tester.pumpWidget(
-          _app(
-            _tx(kind: 'received', fee: BigInt.from(15000)),
-            privacyEnabled: privacyEnabled,
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.text('Tx fee'), findsOneWidget);
-        expect(
-          find.text('0.00015 ZEC'),
-          privacyEnabled ? findsNothing : findsOneWidget,
-        );
-      },
-    );
+  for (final feeState in rust_sync.TransactionFeeState.values) {
+    testWidgets('ordinary receive shows no fee: $feeState', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(393, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        _app(
+          _tx(kind: 'received', fee: BigInt.from(15000), feeState: feeState),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Tx fee'), findsNothing);
+      expect(find.text('0.00015 ZEC'), findsNothing);
+    });
   }
 
-  for (final feeState in [
-    rust_sync.TransactionFeeState.unknown,
-    rust_sync.TransactionFeeState.notApplicable,
-  ]) {
-    testWidgets(
-      'ordinary receive hides a fee without known status: $feeState',
-      (tester) async {
-        await tester.binding.setSurfaceSize(const Size(393, 1000));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        await tester.pumpWidget(
-          _app(
-            _tx(kind: 'received', fee: BigInt.from(15000), feeState: feeState),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.text('Tx fee'), findsNothing);
-        expect(find.text('0.00015 ZEC'), findsNothing);
-      },
-    );
-  }
-
-  testWidgets('ordinary receive shows its fee when history is enriched', (
+  testWidgets('ordinary receive shows no fee even when history is enriched', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(393, 1000));
@@ -465,8 +437,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Tx fee'), findsOneWidget);
-    expect(find.text('0.00015 ZEC'), findsOneWidget);
+    expect(find.text('Tx fee'), findsNothing);
+    expect(find.text('0.00015 ZEC'), findsNothing);
   });
 
   testWidgets('redeemed receipt shows no fee before or after the fee arrives', (

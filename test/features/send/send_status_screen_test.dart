@@ -961,9 +961,9 @@ void main() {
 
   testWidgets('leaving a Keystone retry releases the retained signed batch '
       'once', (tester) async {
-    rustApi.storeError = Exception(
-      'hardware_recovery_retryable: Private transparent recovery is catching '
-      'up; retry after sync',
+    rustApi.storeError = const ApiWalletError(
+      code: ApiWalletErrorCode.retryAfterRecovery,
+      message: 'Private transparent recovery is catching up; retry after sync',
     );
     final args = _reviewArgs();
     await _setDesktopViewport(tester);
