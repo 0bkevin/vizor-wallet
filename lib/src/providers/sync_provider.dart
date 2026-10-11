@@ -2798,8 +2798,8 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
   // ======================== Progress Handling ========================
 
   /// A post-sync follow-up changed wallet data after this sync completed:
-  /// open receipts reload, and balances and recent history are re-read. The
-  /// sync is not completed again.
+  /// open receipts and Activity feeds reload, and balances and recent history
+  /// are re-read. The sync is not completed again.
   Future<void> _onSyncFollowupUpdated() async {
     if (!ref.mounted || _requiresUnlock) return;
     ref.read(syncFollowupProvider.notifier).updated();

@@ -231,46 +231,49 @@ void main() {
     },
   );
 
-  for (final newBlock in [false, true]) {
-    testWidgets(
-      'sync completion refreshes older history (new block: $newBlock)',
-      (tester) async {
-        final before = SyncState(
-          accountUuid: 'account-1',
-          hasAccountScopedData: true,
-          isSyncComplete: true,
-          lastSyncCompletedAt: DateTime.utc(2026, 10, 6),
-        );
-        final sync = FakeSyncNotifier(before);
-        var reads = 0;
-        var refreshing = false;
-        final refreshed = Completer<List<rust_sync.TransactionInfo>>();
-        await tester.pumpWidget(
-          _app(
-            (_) async {
-              reads++;
-              if (!refreshing) {
-                return [
-                  _tx(
-                    txidHex: 'old-pending',
-                    blockTime: BigInt.zero,
-                    minedHeight: BigInt.zero,
-                    kind: 'sent',
-                  ),
-                ];
-              }
-              return refreshed.future;
-            },
-            syncNotifier: sync,
-            etaLabels: const {'old-pending': 'Est. 1–3 min'},
-          ),
-        );
-        await tester.pump(const Duration(milliseconds: 300));
-        await tester.pump(const Duration(milliseconds: 300));
-        expect(find.text('Est. 1–3 min'), findsOneWidget);
-        final initialReads = reads;
-        refreshing = true;
-        // The recent-ten history is unchanged (empty); this older transaction mined.
+  for (final update in ['completion', 'new block', 'follow-up']) {
+    final newBlock = update == 'new block';
+    testWidgets('sync $update refreshes older history', (tester) async {
+      final before = SyncState(
+        accountUuid: 'account-1',
+        hasAccountScopedData: true,
+        isSyncComplete: true,
+        lastSyncCompletedAt: DateTime.utc(2026, 10, 6),
+      );
+      final sync = FakeSyncNotifier(before);
+      var reads = 0;
+      var refreshing = false;
+      final refreshed = Completer<List<rust_sync.TransactionInfo>>();
+      await tester.pumpWidget(
+        _app(
+          (_) async {
+            reads++;
+            if (!refreshing) {
+              return [
+                _tx(
+                  txidHex: 'old-pending',
+                  blockTime: BigInt.zero,
+                  minedHeight: BigInt.zero,
+                  kind: 'sent',
+                ),
+              ];
+            }
+            return refreshed.future;
+          },
+          syncNotifier: sync,
+          etaLabels: const {'old-pending': 'Est. 1–3 min'},
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Est. 1–3 min'), findsOneWidget);
+      final initialReads = reads;
+      refreshing = true;
+      // The recent-ten history is unchanged (empty); this older transaction mined.
+      if (update == 'follow-up') {
+        // Only older history changed; recent rows and sync state stay the same.
+        sync.reportFollowupUpdated();
+      } else {
         sync.emit(
           before.copyWith(
             scannedHeight: newBlock ? 101 : before.scannedHeight,
@@ -278,23 +281,29 @@ void main() {
             lastSyncCompletedAt: DateTime.utc(2026, 10, 6, 0, 1),
           ),
         );
-        await tester.pump(const Duration(milliseconds: 300));
-        expect(reads, initialReads + 1);
-        expect(find.text('Est. 1–3 min'), findsNothing);
-        expect(find.text('Checking status'), findsOneWidget);
-        refreshed.complete([
-          _tx(
-            txidHex: 'old-pending',
-            blockTime: BigInt.from(1800000000),
-            kind: 'sent',
-          ),
-        ]);
-        await tester.pump(const Duration(milliseconds: 300));
-        await tester.pumpAndSettle();
-        expect(find.text('Sent'), findsOneWidget);
-        expect(find.text('Est. 1–3 min'), findsNothing);
-      },
-    );
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(reads, initialReads + 1);
+      expect(
+        find.text('Est. 1–3 min'),
+        update == 'follow-up' ? findsOneWidget : findsNothing,
+      );
+      expect(
+        find.text('Checking status'),
+        update == 'follow-up' ? findsNothing : findsOneWidget,
+      );
+      refreshed.complete([
+        _tx(
+          txidHex: 'old-pending',
+          blockTime: BigInt.from(1800000000),
+          kind: 'sent',
+        ),
+      ]);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      expect(find.text('Sent'), findsOneWidget);
+      expect(find.text('Est. 1–3 min'), findsNothing);
+    });
   }
 
   testWidgets('ETA and status subtitles fit a standard mobile activity row', (

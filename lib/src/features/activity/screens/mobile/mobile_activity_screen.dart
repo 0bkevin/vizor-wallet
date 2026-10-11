@@ -255,6 +255,11 @@ class _MobileActivityScreenState extends ConsumerState<MobileActivityScreen> {
       }
     });
 
+    // Recovery and detail updates can change rows outside recent history.
+    ref.listen<int>(syncFollowupProvider, (_, _) {
+      unawaited(_loadTransactions());
+    });
+
     final accountUuid = ref.watch(accountProvider).value?.activeAccountUuid;
     final giftCardActivityIndex = accountUuid == null
         ? GiftCardActivityIndex.empty
