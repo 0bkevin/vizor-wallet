@@ -6,6 +6,7 @@ use std::{
 
 use rusqlite::{params, OptionalExtension};
 
+use crate::wallet::failure::{FailureCode, WalletFailure};
 use crate::wallet::sync::proposal_locks;
 
 use crate::wallet::{
@@ -116,7 +117,7 @@ pub(crate) fn checkpoint(
     external_ref: Option<&str>,
     proof_pczt: &[u8],
     signature_pczt: &[u8],
-) -> Result<SignedOperationMetadata, String> {
+) -> Result<SignedOperationMetadata, WalletFailure> {
     checkpoint_batch(
         db_path,
         network,
@@ -138,7 +139,7 @@ pub(crate) fn checkpoint_batch(
     external_ref: Option<&str>,
     proof_pczts: &[Vec<u8>],
     signature_pczts: &[Vec<u8>],
-) -> Result<SignedOperationMetadata, String> {
+) -> Result<SignedOperationMetadata, WalletFailure> {
     validate_identifier("operation ID", operation_id)?;
     validate_identifier("account UUID", account_uuid)?;
     let operation_kind = OperationKind::parse(kind)?;
@@ -209,9 +210,15 @@ pub(crate) fn checkpoint_batch(
                     |row| row.get(0),
                 )
                 .map_err(|e| format!("Verify repeated Ledger checkpoint: {e}"))?;
+            // Another signed transaction already holds this operation ID.
+            // Saving these signatures again can never succeed, so the caller
+            // must stop offering retries rather than loop on the same refusal.
             if !exact_match {
-                return Err(format!(
-                    "Ledger operation {operation_id} is already checkpointed with different data"
+                return Err(WalletFailure::coded(
+                    FailureCode::LedgerOperationTerminal,
+                    format!(
+                        "Ledger operation {operation_id} is already checkpointed with different data"
+                    ),
                 ));
             }
         }
@@ -271,7 +278,7 @@ pub(crate) async fn broadcast(
     operation_id: &str,
     spend_params_path: Option<&str>,
     output_params_path: Option<&str>,
-) -> Result<BroadcastResult, String> {
+) -> Result<BroadcastResult, WalletFailure> {
     validate_identifier("operation ID", operation_id)?;
     let _broadcast_guard = BroadcastGuard::acquire(db_path, network, operation_id)?;
     let stored = load_for_broadcast(db_path, network, operation_id)?;
@@ -295,11 +302,13 @@ pub(crate) async fn broadcast(
             &result.txids,
             &result.status,
             result.message.as_deref(),
-        ),
+        )
+        .map_err(WalletFailure::from),
         Err(error) => {
             if record_broadcast_failure(db_path, network, operation_id, &error)? {
-                Err(format!(
-                    "Ledger signed operation cannot be retried: {error}"
+                Err(WalletFailure::coded(
+                    FailureCode::LedgerOperationTerminal,
+                    format!("Ledger signed operation cannot be retried: {error}"),
                 ))
             } else {
                 Err(error)
@@ -498,8 +507,9 @@ fn record_broadcast_failure(
     db_path: &str,
     network: WalletNetwork,
     operation_id: &str,
-    message: &str,
+    failure: &WalletFailure,
 ) -> Result<bool, String> {
+    let message = failure.message.as_str();
     let network = network_name(network);
     let now = now_ms()?;
     with_wallet_db_write_lock("ledger.operations.record_failure", || {
@@ -507,7 +517,7 @@ fn record_broadcast_failure(
         ensure_table(&connection)?;
         proposal_locks::ensure_schema(&connection)?;
         let conn = connection.transaction().map_err(|e| e.to_string())?;
-        if is_terminal_broadcast_failure(message) {
+        if is_terminal_broadcast_failure(failure) {
             conn.execute(
                 &format!(
                     "DELETE FROM {TABLE}
@@ -541,8 +551,11 @@ fn record_broadcast_failure(
     })
 }
 
-fn is_terminal_broadcast_failure(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
+fn is_terminal_broadcast_failure(failure: &WalletFailure) -> bool {
+    if failure.code == Some(FailureCode::AuthorityRefused) {
+        return true;
+    }
+    let normalized = failure.message.to_ascii_lowercase();
     normalized.contains("expired before broadcast") || normalized.contains("broadcast rejected")
 }
 
@@ -1060,7 +1073,8 @@ mod tests {
             &signature,
         )
         .unwrap_err();
-        assert!(error.contains("expiry mismatch"));
+        assert!(error.message.contains("expiry mismatch"));
+        assert_eq!(error.code, None);
     }
 
     #[test]
@@ -1083,8 +1097,38 @@ mod tests {
             &different_signature,
         )
         .unwrap_err();
-        assert!(error.contains("different data"));
+        assert!(error.message.contains("different data"));
         assert_eq!(list(db_path, WalletNetwork::Main, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn checkpoint_conflict_with_different_data_is_terminal() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let db_path = file.path().to_str().unwrap();
+        let saved = checkpoint_test_operation(db_path, "op-1", "send");
+
+        let (different_proof, different_signature, _) = signed_pczt(1_234_501);
+        let conflict = || {
+            checkpoint(
+                db_path,
+                WalletNetwork::Main,
+                "op-1",
+                "account-1",
+                "send",
+                None,
+                &different_proof,
+                &different_signature,
+            )
+            .unwrap_err()
+        };
+        // The app stops offering "Retry saving" on this code: a retry repeats
+        // the same refusal and must leave the saved transaction untouched.
+        assert_eq!(conflict().code, Some(FailureCode::LedgerOperationTerminal));
+        assert_eq!(conflict().code, Some(FailureCode::LedgerOperationTerminal));
+        assert_eq!(
+            list(db_path, WalletNetwork::Main, None).unwrap(),
+            vec![saved]
+        );
     }
 
     #[test]
@@ -1103,6 +1147,7 @@ mod tests {
             &signature,
         )
         .unwrap_err()
+        .message
         .contains("require an external reference"));
         assert!(checkpoint(
             db_path,
@@ -1115,6 +1160,7 @@ mod tests {
             &signature,
         )
         .unwrap_err()
+        .message
         .contains("must not have"));
     }
 
@@ -1150,7 +1196,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.contains("Validate Ledger signed checkpoint"));
+        assert!(error.message.contains("Validate Ledger signed checkpoint"));
         assert!(
             list(file.path().to_str().unwrap(), WalletNetwork::Main, None,)
                 .unwrap()
@@ -1261,7 +1307,7 @@ mod tests {
             db_path,
             WalletNetwork::Main,
             "send-1",
-            "network unavailable",
+            &"network unavailable".into(),
         )
         .unwrap();
         assert!(!terminal);
@@ -1270,6 +1316,33 @@ mod tests {
         assert_eq!(listed[0].state, STATE_SIGNED_PENDING_BROADCAST);
         assert_eq!(listed[0].status.as_deref(), Some("retryable_error"));
         assert!(acknowledge(db_path, WalletNetwork::Main, "send-1").is_err());
+    }
+
+    /// A refusal transparent broadcast authority made for good, such as
+    /// quarantine or a hold, discards the operation and releases its inputs;
+    /// a busy wallet or recovery still catching up keeps it for a retry.
+    #[test]
+    fn a_final_authority_refusal_discards_the_signed_operation() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let db_path = file.path().to_str().unwrap();
+        checkpoint_test_operation(db_path, "send-1", "send");
+        let retryable = WalletFailure::coded(
+            FailureCode::RetryAfterRecovery,
+            "Reserve transparent broadcast authority: database is locked",
+        );
+        assert!(
+            !record_broadcast_failure(db_path, WalletNetwork::Main, "send-1", &retryable).unwrap()
+        );
+        assert_eq!(list(db_path, WalletNetwork::Main, None).unwrap().len(), 1);
+
+        let refused = WalletFailure::coded(
+            FailureCode::AuthorityRefused,
+            "Transparent broadcast authority unavailable: Transparent funds are unavailable",
+        );
+        assert!(
+            record_broadcast_failure(db_path, WalletNetwork::Main, "send-1", &refused).unwrap()
+        );
+        assert!(list(db_path, WalletNetwork::Main, None).unwrap().is_empty());
     }
 
     #[test]
@@ -1281,7 +1354,7 @@ mod tests {
             db_path,
             WalletNetwork::Main,
             "send-1",
-            "Hardware signing request expired before broadcast",
+            &"Hardware signing request expired before broadcast".into(),
         )
         .unwrap();
 

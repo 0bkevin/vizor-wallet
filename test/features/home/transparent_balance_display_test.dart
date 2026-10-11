@@ -45,6 +45,83 @@ void main() {
       expect(display.text(_format), 'Unavailable');
       expect(display.amount, isNull);
       expect(display.visible, isTrue);
+      expect(display.hint, isNull);
+    });
+
+    test('a stopped recovery says why for each reason', () {
+      final hints = <String>{};
+      for (final reason in rust_sync.TransparentStopReason.values) {
+        final display = TransparentBalanceDisplay.of(
+          SyncState(
+            transparentAuthority: rust_sync.TransparentBalanceAuthority.stopped,
+            transparentStop: reason,
+          ),
+        );
+        expect(display.text(_format), 'Recovery stopped', reason: '$reason');
+        expect(display.amount, isNull, reason: '$reason');
+        expect(display.visible, isTrue, reason: '$reason');
+        final hint = display.hint;
+        expect(hint, isNotNull, reason: '$reason');
+        hints.add(hint!);
+      }
+      expect(hints, hasLength(rust_sync.TransparentStopReason.values.length));
+    });
+
+    test('an unfinished opt-out says to turn Private queries off again', () {
+      final display = TransparentBalanceDisplay.of(
+        SyncState(
+          transparentAuthority: rust_sync.TransparentBalanceAuthority.stopped,
+          transparentStop: rust_sync.TransparentStopReason.optOutUnfinished,
+        ),
+      );
+      expect(
+        display.hint,
+        "Turning off Private queries didn't finish. Turn it off again in "
+        'Settings to look up transparent funds publicly.',
+      );
+      expect(display.hint, isNot(contains('until private recovery')));
+      expect(display.hint, isNot(contains('selected')));
+    });
+
+    test('conflicting records say turning off discards them', () {
+      for (final reason in [
+        rust_sync.TransparentStopReason.quarantined,
+        rust_sync.TransparentStopReason.legacyDiscrepancy,
+      ]) {
+        final hint = TransparentBalanceDisplay.of(
+          SyncState(
+            transparentAuthority: rust_sync.TransparentBalanceAuthority.stopped,
+            transparentStop: reason,
+          ),
+        ).hint;
+        expect(
+          hint,
+          contains(
+            'Turning off Private queries discards privately recovered '
+            'records and looks up transparent funds publicly.',
+          ),
+          reason: '$reason',
+        );
+        expect(hint, isNot(contains('restore public lookups')));
+      }
+    });
+
+    test('a stopped recovery never reads as a spendable amount', () {
+      final display = TransparentBalanceDisplay.of(
+        SyncState(
+          transparentAuthority: rust_sync.TransparentBalanceAuthority.stopped,
+          transparentStop: rust_sync.TransparentStopReason.stalled,
+          transparentLastKnownBalance: BigInt.from(9),
+          // Nothing is spendable without authority.
+          transparentBalance: BigInt.zero,
+        ),
+      );
+      expect(display.text(_format), '9zat (last known, recovery stopped)');
+      expect(
+        display.authority,
+        isNot(rust_sync.TransparentBalanceAuthority.current),
+      );
+      expect(display.visible, isTrue);
     });
   });
 
@@ -77,6 +154,41 @@ void main() {
       },
     );
 
+    test('a fetched balance carries its stop reason and private policy', () {
+      final stopped = SyncState().withFetchedAccountData(
+        balance: _balance(
+          rust_sync.TransparentBalanceAuthority.stopped,
+          lastKnown: BigInt.from(9),
+          stop: rust_sync.TransparentStopReason.optOutUnfinished,
+          private: true,
+        ),
+        syncComplete: true,
+      );
+      expect(
+        stopped.transparentStop,
+        rust_sync.TransparentStopReason.optOutUnfinished,
+      );
+      expect(stopped.transparentPrivate, isTrue);
+      // An unrelated update keeps both.
+      final updated = stopped.copyWith(percentage: 0.5);
+      expect(
+        updated.transparentStop,
+        rust_sync.TransparentStopReason.optOutUnfinished,
+      );
+      expect(updated.transparentPrivate, isTrue);
+
+      // Restored authority clears the stop reason.
+      final current = stopped.withFetchedAccountData(
+        balance: _balance(
+          rust_sync.TransparentBalanceAuthority.current,
+          private: true,
+        ),
+        syncComplete: true,
+      );
+      expect(current.transparentStop, isNull);
+      expect(current.transparentPrivate, isTrue);
+    });
+
     test('an unrelated update keeps the authority', () {
       final state = SyncState(
         transparentAuthority: rust_sync.TransparentBalanceAuthority.lastKnown,
@@ -98,6 +210,14 @@ void main() {
     const shieldingRefusal =
         'Transparent recovery is incomplete; transparent funds are '
         'unavailable until it completes';
+    // Vizor's shielding refusal for a private wallet while Private queries
+    // is off arrives coded; its text decides nothing.
+    const optOutUnfinishedRefusal = rust_sync.ApiWalletError(
+      code: rust_sync.ApiWalletErrorCode.optOutUnfinished,
+      message:
+          'Turning off private queries did not finish; turn private queries '
+          'off again to use transparent funds',
+    );
 
     test('match the recovery-incomplete copy', () {
       expect(isTransparentRecoveryIncompleteError(libraryRefusal), isTrue);
@@ -109,10 +229,28 @@ void main() {
     });
 
     test('shielding reports recovery, not insufficient funds', () {
+      // Vizor's own refusal is coded, so any wording reports recovery.
       expect(
-        friendlyShieldBalanceError(Exception(shieldingRefusal)),
+        friendlyShieldBalanceError(
+          const rust_sync.ApiWalletError(
+            code: rust_sync.ApiWalletErrorCode.recoveryIncomplete,
+            message: 'reworded',
+          ),
+        ),
         transparentRecoveryIncompleteMessage,
       );
+      // The library's refusal still reaches the app as text.
+      expect(
+        friendlyShieldBalanceError(Exception(libraryRefusal)),
+        transparentRecoveryIncompleteMessage,
+      );
+    });
+
+    test('an unfinished opt-out never promises recovery', () {
+      final copy = friendlyShieldBalanceError(optOutUnfinishedRefusal);
+      expect(copy, privateQueriesOptOutUnfinishedMessage);
+      expect(copy, contains('Turn it off again'));
+      expect(copy, isNot(contains('until private recovery completes')));
     });
   });
 }
@@ -120,10 +258,14 @@ void main() {
 rust_sync.WalletBalance _balance(
   rust_sync.TransparentBalanceAuthority authority, {
   BigInt? lastKnown,
+  rust_sync.TransparentStopReason? stop,
+  bool private = false,
 }) {
   return rust_sync.WalletBalance(
     availability: rust_sync.WalletBalanceAvailability.available,
     transparentAuthority: authority,
+    transparentPrivate: private,
+    transparentStop: stop,
     transparentLastKnown: lastKnown,
     transparent: BigInt.zero,
     sapling: BigInt.zero,

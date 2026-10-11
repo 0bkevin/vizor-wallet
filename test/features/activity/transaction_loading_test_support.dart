@@ -17,6 +17,7 @@ import 'package:zcash_wallet/src/features/address_book/providers/address_book_pr
 import 'package:zcash_wallet/src/features/send/widgets/send_recipient_resolver.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
 import 'package:zcash_wallet/src/providers/sync_provider.dart';
+import 'package:zcash_wallet/src/features/activity/transaction_completeness.dart';
 import 'package:zcash_wallet/src/rust/api/sync.dart' as rust_sync;
 
 import '../../fakes/fake_sync_notifier.dart';
@@ -25,23 +26,27 @@ import '../../figma_compare/figma_compare_font_loader.dart';
 const _txid =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
-rust_sync.TransactionInfo _tx({String kind = 'received', int height = 100}) =>
-    rust_sync.TransactionInfo(
-      detailsComplete: true,
-      feeState: rust_sync.TransactionFeeState.known,
-      provisional: false,
-      txidHex: _txid,
-      txKind: kind,
-      minedHeight: BigInt.from(height),
-      expiredUnmined: false,
-      accountBalanceDelta: 0,
-      fee: BigInt.zero,
-      blockTime: BigInt.from(1764150000),
-      createdTime: BigInt.from(1764150000),
-      isTransparent: false,
-      displayAmount: BigInt.from(100000000),
-      displayPool: 'shielded',
-    );
+rust_sync.TransactionInfo _tx({
+  String kind = 'received',
+  int height = 100,
+  int amount = 1,
+}) => rust_sync.TransactionInfo(
+  amountIncludesFee: false,
+  detailsComplete: true,
+  feeState: rust_sync.TransactionFeeState.known,
+  provisional: false,
+  txidHex: _txid,
+  txKind: kind,
+  minedHeight: BigInt.from(height),
+  expiredUnmined: false,
+  accountBalanceDelta: 0,
+  fee: BigInt.zero,
+  blockTime: BigInt.from(1764150000),
+  createdTime: BigInt.from(1764150000),
+  isTransparent: false,
+  displayAmount: BigInt.from(amount * 100000000),
+  displayPool: 'shielded',
+);
 
 rust_sync.TransactionDetail _detail(String memo, {String kind = 'received'}) =>
     rust_sync.TransactionDetail(
@@ -51,6 +56,8 @@ rust_sync.TransactionDetail _detail(String memo, {String kind = 'received'}) =>
       txKind: kind,
       memo: memo,
       outputs: const [],
+      transparentRecipients: const [],
+      transparentOmissions: const [],
     );
 
 void transactionLoadingTests({required bool mobile}) {
@@ -162,7 +169,9 @@ void transactionLoadingTests({required bool mobile}) {
     await tester.pump();
     expect(find.byType(ReceiptValueSkeleton), findsNothing);
     expect(find.text('Show full address'), findsNothing);
-    expect(find.text('To'), findsNothing);
+    // The send keeps its To row, naming no one.
+    expect(find.text('To'), findsOneWidget);
+    expect(find.text(kUnknownRecipientText), findsOneWidget);
     expect(find.text('Message'), findsNothing);
   });
 
@@ -218,14 +227,9 @@ void transactionLoadingTests({required bool mobile}) {
           }
           await tester.pump();
           await tester.pump();
+          // Desktop and mobile both keep the send title without a recipient.
           expect(
-            find.text(
-              kind == 'received'
-                  ? receivedTitle
-                  : mobile
-                  ? 'Sent successfully'
-                  : 'Transaction',
-            ),
+            find.text(kind == 'received' ? receivedTitle : 'Sent successfully'),
             findsOneWidget,
           );
           expect(find.text('Completed'), findsOneWidget);
@@ -356,6 +360,46 @@ void transactionLoadingTests({required bool mobile}) {
     );
   }
 
+  testWidgets('a refresh follows the shown leg of a two-row transaction', (
+    tester,
+  ) async {
+    // Private recovery can report a sent and a received row for one txid,
+    // the sent row first.
+    SyncState legs({required int sent, required int received}) => SyncState(
+      accountUuid: 'account-1',
+      hasAccountScopedData: true,
+      percentage: 1,
+      recentTransactions: [
+        _tx(kind: 'sent', amount: sent),
+        _tx(amount: received),
+      ],
+    );
+    final sync = FakeSyncNotifier(legs(sent: 1, received: 1));
+    var reads = 0;
+    await _pump(
+      tester,
+      mobile: mobile,
+      sync: sync,
+      history: (_) async {
+        reads++;
+        return [_tx()];
+      },
+    );
+    final initialReads = reads;
+
+    // Only the shown received leg changes: the receipt reloads.
+    sync.emit(legs(sent: 1, received: 2));
+    await tester.pump();
+    await tester.pump();
+    expect(reads, initialReads + 1);
+
+    // Only the other leg changes: nothing to reload.
+    sync.emit(legs(sent: 2, received: 2));
+    await tester.pump();
+    await tester.pump();
+    expect(reads, initialReads + 1);
+  });
+
   testWidgets('an older history refresh cannot overwrite the latest result', (
     tester,
   ) async {
@@ -422,6 +466,8 @@ rust_sync.TransactionDetail _completeDetail({
           ),
         ]
       : const [],
+  transparentRecipients: const [],
+  transparentOmissions: const [],
 );
 
 SyncState _sync({int height = 100}) => SyncState(

@@ -86,8 +86,10 @@ use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::consensus::{NetworkConstants, Parameters};
 
 use crate::wallet::db::with_wallet_db_write_lock;
+use crate::wallet::failure::{FailureCode, WalletFailure};
 use crate::wallet::network::WalletNetwork;
 
+use super::hardware_authority::DispatchRefusal;
 use super::{
     consume_stored_proposal, discard_stored_proposal, finish_stored_proposal, open_wallet_db,
     retain_stored_proposal_lock_until_expiry, stored_proposal_lock, StoredOvkPolicy,
@@ -1279,9 +1281,33 @@ pub(crate) fn extract_transaction_from_pczt(
     finalize_and_extract(combined, sapling_vks.as_ref())
 }
 
-// Keep identical to the Dart send-flow classifier. This marker means the
-// validated signed batch and its proposal remain available for retry.
-const HARDWARE_RECOVERY_RETRYABLE_PREFIX: &str = "hardware_recovery_retryable:";
+/// The error for a broadcast that transparent broadcast authority refused for
+/// good before anything was sent: quarantine, a hold, a policy that no longer
+/// admits the inputs, or unknown, spent or immature inputs. A proposal's own
+/// release already ends it; without one, the Ledger outbox reads the code,
+/// discards the operation and releases its inputs instead of retrying it
+/// until expiry.
+fn final_refusal(refusal: DispatchRefusal) -> WalletFailure {
+    WalletFailure::coded(FailureCode::AuthorityRefused, String::from(refusal))
+}
+
+/// The error for a refused broadcast that carries no retained batch: coded
+/// retryable while private recovery catches up or the wallet is too busy to
+/// reserve, so the caller keeps its signed payload and offers to send it
+/// again.
+fn retryable_refusal(refusal: DispatchRefusal) -> WalletFailure {
+    if refusal.is_retryable() {
+        WalletFailure::coded(FailureCode::RetryAfterRecovery, String::from(refusal))
+    } else {
+        String::from(refusal).into()
+    }
+}
+
+/// A failure after which the validated signed batch and its proposal stay
+/// available, so the same signatures can be sent again after sync.
+fn retry_after_recovery(error: impl std::fmt::Display) -> WalletFailure {
+    WalletFailure::coded(FailureCode::RetryAfterRecovery, error.to_string())
+}
 
 struct PreparedSignedPczt {
     combined: pczt::Pczt,
@@ -1359,7 +1385,7 @@ enum PcztBroadcastAttempt {
     Accepted,
     TransportUnknown(String),
     DefiniteRejection(String),
-    RouteUnavailable(String),
+    RouteUnavailable(WalletFailure),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1374,7 +1400,7 @@ struct PcztBroadcastPlan {
 enum PcztBroadcastStep {
     Continue,
     Stop(PcztBroadcastPlan),
-    Fail(String),
+    Fail(WalletFailure),
 }
 
 fn pczt_broadcast_step(
@@ -1410,7 +1436,7 @@ fn pczt_broadcast_step(
             })
         }
         PcztBroadcastAttempt::DefiniteRejection(error) if index == 0 => {
-            PcztBroadcastStep::Fail(error)
+            PcztBroadcastStep::Fail(error.into())
         }
         PcztBroadcastAttempt::DefiniteRejection(error) => {
             PcztBroadcastStep::Stop(PcztBroadcastPlan {
@@ -1445,25 +1471,29 @@ fn pczt_broadcast_step(
 fn release_pczt_proposal_after_failure<T>(
     proposal_id: u64,
     send_flow_id: &str,
-    error: String,
-) -> Result<T, String> {
+    error: impl Into<WalletFailure>,
+) -> Result<T, WalletFailure> {
+    let error = error.into();
     match finish_stored_proposal(proposal_id, send_flow_id, true) {
         Ok(()) => Err(error),
-        Err(cleanup_error) => Err(format!(
-            "{error}; additionally failed to release proposal inputs: {cleanup_error}"
-        )),
+        Err(cleanup_error) => Err(WalletFailure {
+            message: format!(
+                "{error}; additionally failed to release proposal inputs: {cleanup_error}"
+            ),
+            ..error
+        }),
     }
 }
 
 fn release_signed_pczt_operation_after_failure<T>(
     proposal: Option<(u64, &str)>,
-    error: String,
-) -> Result<T, String> {
+    error: impl Into<WalletFailure>,
+) -> Result<T, WalletFailure> {
     match proposal {
         Some((proposal_id, send_flow_id)) => {
             release_pczt_proposal_after_failure(proposal_id, send_flow_id, error)
         }
-        None => Err(error),
+        None => Err(error.into()),
     }
 }
 
@@ -1592,7 +1622,7 @@ pub async fn store_and_broadcast_signed_pczts_for_proposal(
     signatures: &[Vec<u8>],
     spend_params_path: Option<&str>,
     output_params_path: Option<&str>,
-) -> Result<StoreAndBroadcastPcztsResult, String> {
+) -> Result<StoreAndBroadcastPcztsResult, WalletFailure> {
     store_and_broadcast_pczts_for_proposal(
         db_path,
         lightwalletd_url,
@@ -1622,7 +1652,7 @@ pub async fn store_and_broadcast_pczts_with_compact_signatures_for_proposal(
     signatures: &[Vec<pczt::roles::signer::SpendAuthSignature>],
     spend_params_path: Option<&str>,
     output_params_path: Option<&str>,
-) -> Result<StoreAndBroadcastPcztsResult, String> {
+) -> Result<StoreAndBroadcastPcztsResult, WalletFailure> {
     store_and_broadcast_pczts_for_proposal(
         db_path,
         lightwalletd_url,
@@ -1647,7 +1677,7 @@ async fn store_and_broadcast_pczts_for_proposal(
     signatures: PcztSignatures<'_>,
     spend_params_path: Option<&str>,
     output_params_path: Option<&str>,
-) -> Result<StoreAndBroadcastPcztsResult, String> {
+) -> Result<StoreAndBroadcastPcztsResult, WalletFailure> {
     let proposal_lock = match stored_proposal_lock(proposal_id, send_flow_id) {
         Ok(lock) => lock,
         Err(error) => {
@@ -1683,7 +1713,7 @@ pub(crate) async fn store_and_broadcast_signed_pczts(
     signatures: &[Vec<u8>],
     spend_params_path: Option<&str>,
     output_params_path: Option<&str>,
-) -> Result<StoreAndBroadcastPcztsResult, String> {
+) -> Result<StoreAndBroadcastPcztsResult, WalletFailure> {
     store_and_broadcast_pczts_inner(
         db_path,
         lightwalletd_url,
@@ -1706,7 +1736,7 @@ async fn store_and_broadcast_pczts_inner(
     spend_params_path: Option<&str>,
     output_params_path: Option<&str>,
     proposal: Option<(u64, &str)>,
-) -> Result<StoreAndBroadcastPcztsResult, String> {
+) -> Result<StoreAndBroadcastPcztsResult, WalletFailure> {
     use zcash_client_backend::data_api::wallet::{
         decrypt_and_store_transaction, extract_and_store_transaction_from_pczt,
     };
@@ -1739,8 +1769,8 @@ async fn store_and_broadcast_pczts_inner(
     // The signed batch is valid. Missing recovery evidence or a read failure
     // must preserve its retry capability and input reservations until sync can
     // restore that evidence; these errors do not abandon the proposal.
-    let mined = stored_mined_transactions(db_path, network, &prepared)
-        .map_err(|error| format!("{HARDWARE_RECOVERY_RETRYABLE_PREFIX} {error}"))?;
+    let mined =
+        stored_mined_transactions(db_path, network, &prepared).map_err(retry_after_recovery)?;
     if mined.iter().all(|mined| *mined) {
         if let Some((proposal_id, send_flow_id)) = proposal {
             if let Err(error) = finish_stored_proposal(proposal_id, send_flow_id, false) {
@@ -1759,9 +1789,9 @@ async fn store_and_broadcast_pczts_inner(
     let mined_count = mined.iter().filter(|mined| **mined).count() as u32;
     // A completed round makes the remaining batch a recovery obligation. RPC
     // failures must preserve its proposal and input reservation for retry.
-    let rpc_failure = |error| {
+    let rpc_failure = |error: String| {
         if mined_count > 0 {
-            Err(format!("{HARDWARE_RECOVERY_RETRYABLE_PREFIX} {error}"))
+            Err(retry_after_recovery(error))
         } else {
             release_signed_pczt_operation_after_failure(proposal, error)
         }
@@ -1820,7 +1850,8 @@ async fn store_and_broadcast_pczts_inner(
                     Ok(()) => Ok(result),
                     Err(cleanup_error) => Err(format!(
                         "{error}; additionally failed to release proposal inputs: {cleanup_error}"
-                    )),
+                    )
+                    .into()),
                 }
             }
             None => Ok(result),
@@ -1851,7 +1882,7 @@ async fn store_and_broadcast_pczts_inner(
                     match pczt_broadcast_step(
                         index,
                         prepared.len(),
-                        PcztBroadcastAttempt::RouteUnavailable(error.to_string()),
+                        PcztBroadcastAttempt::RouteUnavailable(error.to_string().into()),
                     ) {
                         PcztBroadcastStep::Continue => unreachable!(),
                         PcztBroadcastStep::Stop(mut plan) => {
@@ -1863,7 +1894,7 @@ async fn store_and_broadcast_pczts_inner(
                                 persisted_prefix_len: index,
                                 broadcasted_count: mined_count + newly_broadcasted,
                                 status: StoreAndBroadcastPcztsResult::PARTIAL_BROADCAST,
-                                message: Some(error),
+                                message: Some(error.message),
                             };
                         }
                         PcztBroadcastStep::Fail(error) => {
@@ -1872,15 +1903,41 @@ async fn store_and_broadcast_pczts_inner(
                     }
                 }
             };
+            let earlier = prepared[..index]
+                .iter()
+                .map(|p| &p.extracted.tx)
+                .collect::<Vec<_>>();
+            if newly_broadcasted == 0 && mined_count == 0 {
+                // A block that lands while the device signs leaves private
+                // recovery behind the wallet's tip for a moment. Wait for it
+                // before anything is retained, and keep the signed batch for a
+                // retry if it does not catch up in time.
+                match super::hardware_authority::await_authority(
+                    db_path,
+                    network,
+                    &item.extracted.tx,
+                    &earlier,
+                    latest.height,
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(refusal) if refusal.is_retryable() => {
+                        return Err(retryable_refusal(refusal));
+                    }
+                    Err(refusal) => {
+                        return release_signed_pczt_operation_after_failure(
+                            proposal,
+                            final_refusal(refusal),
+                        );
+                    }
+                }
+            }
             if newly_broadcasted == 0 {
                 if let Some((proposal_id, send_flow_id)) = proposal {
                     super::mark_proposal_broadcast_started(proposal_id, send_flow_id)?;
                 }
             }
-            let earlier = prepared[..index]
-                .iter()
-                .map(|p| &p.extracted.tx)
-                .collect::<Vec<_>>();
             let attempt = match super::hardware_authority::dispatch(
                 db_path,
                 network,
@@ -1904,7 +1961,19 @@ async fn store_and_broadcast_pczts_inner(
                     }
                 }
                 Ok(Err(error)) => PcztBroadcastAttempt::TransportUnknown(error.to_string()),
-                Err(error) => PcztBroadcastAttempt::RouteUnavailable(error),
+                // A block landed between the wait and the reservation, or the
+                // wallet stayed too busy to reserve. Nothing was sent, and the
+                // retained batch stays retryable.
+                Err(refusal)
+                    if refusal.is_retryable() && newly_broadcasted == 0 && mined_count == 0 =>
+                {
+                    return Err(retryable_refusal(refusal));
+                }
+                // Refused for good with nothing sent: the batch fails whole.
+                Err(refusal) if index == 0 && mined_count == 0 => {
+                    PcztBroadcastAttempt::RouteUnavailable(final_refusal(refusal))
+                }
+                Err(error) => PcztBroadcastAttempt::RouteUnavailable(error.to_string().into()),
             };
             if matches!(attempt, PcztBroadcastAttempt::Accepted) {
                 newly_broadcasted += 1;
@@ -1925,7 +1994,7 @@ async fn store_and_broadcast_pczts_inner(
                         persisted_prefix_len: index,
                         broadcasted_count: mined_count + newly_broadcasted,
                         status: StoreAndBroadcastPcztsResult::PARTIAL_BROADCAST,
-                        message: Some(error),
+                        message: Some(error.message),
                     };
                 }
                 PcztBroadcastStep::Fail(error) => {
@@ -2335,7 +2404,7 @@ pub async fn extract_and_broadcast_pczt(
     pczt_with_signatures_bytes: &[u8],
     spend_params_path: Option<&str>,
     output_params_path: Option<&str>,
-) -> Result<ExtractAndBroadcastPcztResult, String> {
+) -> Result<ExtractAndBroadcastPcztResult, WalletFailure> {
     use zcash_client_backend::data_api::wallet::{
         decrypt_and_store_transaction, extract_and_store_transaction_from_pczt,
     };
@@ -2433,7 +2502,14 @@ pub async fn extract_and_broadcast_pczt(
     if let Some(error) =
         pczt_broadcast_expiry_error(&txid, u32::from(tx.expiry_height()), latest.height)
     {
-        return Err(error);
+        return Err(error.into());
+    }
+    // Nothing is retained before submission here; a refusal while private
+    // recovery catches up keeps only the caller's signed payload for a retry.
+    if let Err(refusal) =
+        super::hardware_authority::await_authority(db_path, network, &tx, &[], latest.height).await
+    {
+        return Err(retryable_refusal(refusal));
     }
 
     let resp = match super::hardware_authority::dispatch(
@@ -2448,7 +2524,8 @@ pub async fn extract_and_broadcast_pczt(
             )
         },
     )
-    .await?
+    .await
+    .map_err(retryable_refusal)?
     {
         Ok(resp) => resp,
         // Once SendTransaction has started, a gRPC status is not proof that
@@ -2465,7 +2542,11 @@ pub async fn extract_and_broadcast_pczt(
         }
     };
 
-    handle_pczt_send_response(&txid.to_string(), &resp, store_locally)
+    Ok(handle_pczt_send_response(
+        &txid.to_string(),
+        &resp,
+        store_locally,
+    )?)
 }
 
 fn pczt_broadcast_expiry_error(
@@ -2740,6 +2821,26 @@ mod tests {
     }
 
     #[test]
+    fn only_a_refusal_that_can_clear_keeps_the_signature() {
+        let catching_up = retryable_refusal(DispatchRefusal::CatchingUp(
+            "Transparent broadcast authority unavailable".into(),
+        ));
+        // Dart offers to retry the same signature only for this code.
+        assert_eq!(catching_up.code, Some(FailureCode::RetryAfterRecovery));
+        // A wallet too busy to reserve decided nothing about the transaction.
+        let busy = retryable_refusal(DispatchRefusal::Unavailable(
+            "Reserve transparent broadcast authority: database is locked".into(),
+        ));
+        assert_eq!(busy.code, Some(FailureCode::RetryAfterRecovery));
+        let refused = retryable_refusal(DispatchRefusal::Refused(
+            "Transparent broadcast authority unavailable".into(),
+        ));
+        assert_eq!(refused.code, None, "{refused}");
+        // The message is for people only; it carries no marker.
+        assert!(!catching_up.message.contains("retryable"), "{catching_up}");
+    }
+
+    #[test]
     fn pczt_set_first_rejection_never_persists() {
         let step = pczt_broadcast_step(
             0,
@@ -2747,7 +2848,7 @@ mod tests {
             PcztBroadcastAttempt::DefiniteRejection("rejected".to_string()),
         );
 
-        assert_eq!(step, PcztBroadcastStep::Fail("rejected".to_string()));
+        assert_eq!(step, PcztBroadcastStep::Fail("rejected".into()));
     }
 
     #[test]
