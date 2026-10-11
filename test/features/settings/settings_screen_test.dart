@@ -66,8 +66,7 @@ void main() {
     }
 
     final defaultCopy = await description();
-    expect(defaultCopy, startsWith('Experimental.'));
-    expect(defaultCopy, contains(kPrivateTransparentRecoverySettingsCopy));
+    expect(defaultCopy, kPrivateQueriesSettingsCopy);
   });
 
   test('uninstall setting is supported only on macOS and Linux', () {
@@ -899,7 +898,11 @@ void main() {
           contains('without Tor, to your IP address'),
         ),
       );
-      expect(kPrivateQueriesTurnOffBody, contains('discard'));
+      expect(
+        kPrivateQueriesTurnOffBody,
+        'Vizor will rebuild your transparent history publicly, allowing the '
+        'server to learn all your addresses.',
+      );
 
       await tester.tap(
         find.byKey(const ValueKey('private_queries_turn_off_cancel')),

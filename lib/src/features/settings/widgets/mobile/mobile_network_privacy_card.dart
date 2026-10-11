@@ -1,7 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -144,13 +142,7 @@ class MobileNetworkPrivacyCard extends ConsumerWidget {
           if (enhancePirAvailable) const SizedBox(height: AppSpacing.sm),
           if (enhancePirAvailable)
             Text(
-              // iOS background migration tracking cannot run privately, so it
-              // stays off while this is on; say where confirmations happen.
-              privateQueriesDescription(
-                defaultTargetPlatform == TargetPlatform.iOS
-                    ? 'Experimental. Queries and enhances transaction data without revealing their IDs to servers. While on, migration confirmations are checked only when Vizor is open.'
-                    : 'Experimental. Queries and enhances transaction data without revealing their IDs to servers.',
-              ),
+              kPrivateQueriesSettingsCopy,
               key: const ValueKey('mobile_settings_enhance_pir_description'),
               style: AppTypography.bodyMedium.copyWith(
                 color: colors.text.secondary,

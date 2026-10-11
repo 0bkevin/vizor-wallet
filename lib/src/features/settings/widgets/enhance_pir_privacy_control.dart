@@ -102,9 +102,7 @@ class EnhancePirPrivacyControl extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
           child: Text(
-            privateQueriesDescription(
-              'Experimental. Looks up supported transactions without revealing their IDs to servers. Transaction details may take longer to appear.',
-            ),
+            kPrivateQueriesSettingsCopy,
             key: const ValueKey('settings_enhance_pir_description'),
             style: AppTypography.bodyMedium.copyWith(
               color: colors.text.secondary,

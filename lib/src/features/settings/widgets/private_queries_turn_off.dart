@@ -16,8 +16,8 @@ const kPrivateQueriesTurnOffTitle = 'Turn off private queries?';
 
 /// What turning private queries off does to the wallet's transparent funds.
 const kPrivateQueriesTurnOffBody =
-    'Vizor will discard what private recovery found and look up this '
-    "wallet's transparent funds and history publicly.";
+    'Vizor will rebuild your transparent history publicly, allowing the '
+    'server to learn all your addresses.';
 
 /// What the server learns once private queries are off.
 const kPrivateQueriesTurnOffDisclosure =

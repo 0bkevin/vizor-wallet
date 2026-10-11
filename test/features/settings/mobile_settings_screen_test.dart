@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:zcash_wallet/src/app_bootstrap.dart';
 import 'package:zcash_wallet/src/core/config/app_version_config.dart';
+import 'package:zcash_wallet/src/core/config/private_transparent_recovery_config.dart';
 import 'package:zcash_wallet/src/core/config/rpc_endpoint_config.dart';
 import 'package:zcash_wallet/src/core/layout/mobile/app_mobile_sheet.dart';
 import 'package:zcash_wallet/src/core/layout/mobile/app_mobile_shell.dart';
@@ -324,12 +325,12 @@ void main() {
     expect(note, findsOneWidget);
     expect(find.textContaining('suspended'), findsNothing);
     expect(find.textContaining('transparent funds'), findsOneWidget);
-    expect(find.textContaining('from the account birthday'), findsOneWidget);
+    expect(find.text(kPrivateQueriesSettingsCopy), findsOneWidget);
   });
 
   for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
     testWidgets(
-      'private recovery discloses foreground-only migration confirmations on ${platform.name}',
+      'private queries uses the shared settings copy on ${platform.name}',
       (tester) async {
         debugDefaultTargetPlatformOverride = platform;
         addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -339,12 +340,7 @@ void main() {
           const ValueKey('mobile_settings_enhance_pir_description'),
         );
         await tester.scrollUntilVisible(note, 200);
-        expect(
-          find.textContaining(
-            'migration confirmations are checked only when Vizor is open',
-          ),
-          platform == TargetPlatform.iOS ? findsOneWidget : findsNothing,
-        );
+        expect(tester.widget<Text>(note).data, kPrivateQueriesSettingsCopy);
         debugDefaultTargetPlatformOverride = null;
       },
     );
