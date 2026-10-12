@@ -98,10 +98,42 @@ pub enum SyncEventKind {
     FollowupUpdated,
 }
 
+/// Additional scan work discovered after the original queue drained.
+/// The cycle identifies one repair; retries retain it and report only real work.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CheckingProgress {
+    pub cycle: u32,
+    pub percentage: f64,
+    pub display_target_percentage: f64,
+}
+
+fn checking_progress(
+    cycle: u32,
+    total: u64,
+    remaining: u64,
+    target_blocks: u64,
+) -> Option<CheckingProgress> {
+    (cycle > 0).then(|| CheckingProgress {
+        cycle,
+        percentage: target_percentage_after_blocks(total, remaining, 0),
+        display_target_percentage: target_percentage_after_blocks(total, remaining, target_blocks),
+    })
+}
+
+fn begin_checking(cycle: &mut u32, total: u64, tip: u64) -> SyncProgressEvent {
+    *cycle += 1;
+    SyncProgressEvent {
+        checking: checking_progress(*cycle, total, total, 0),
+        remaining_scan_blocks: Some(total),
+        ..preparation_progress_event(tip, "chain_prepare", 0, 0)
+    }
+}
+
 /// Progress event sent to caller (Dart or Swift).
 #[derive(Clone, Debug)]
 pub struct SyncProgressEvent {
     pub kind: SyncEventKind,
+    pub checking: Option<CheckingProgress>,
     pub scanned_height: u64,
     pub chain_tip_height: u64,
     pub percentage: f64,
@@ -162,6 +194,7 @@ fn preparation_progress_event(
 ) -> SyncProgressEvent {
     SyncProgressEvent {
         kind: SyncEventKind::Progress,
+        checking: None,
         scanned_height: 0,
         chain_tip_height,
         percentage: 0.0,
@@ -183,6 +216,7 @@ pub(crate) fn followup_updated_event(completed: (u64, u64)) -> SyncProgressEvent
     let (scanned_height, chain_tip_height) = completed;
     SyncProgressEvent {
         kind: SyncEventKind::FollowupUpdated,
+        checking: None,
         scanned_height,
         chain_tip_height,
         percentage: 1.0,
@@ -2715,6 +2749,7 @@ pub async fn run_sync_inner(
         }
 
         progress.lock().unwrap().start_attempt();
+        let checking_cycle = progress.lock().unwrap().checking_cycle();
         let report_progress = |event| {
             let event = progress.lock().unwrap().report(event);
             progress_fn(event);
@@ -2730,6 +2765,7 @@ pub async fn run_sync_inner(
             active_account_target.as_ref(),
             allow_resubmit,
             &report_progress,
+            checking_cycle,
         )
         .await
         {
@@ -3065,6 +3101,7 @@ async fn run_sync_impl(
     active_account_target: Option<&ActiveSyncAccountTarget>,
     allow_resubmit: bool,
     progress_fn: &(impl Fn(SyncProgressEvent) + Send + Sync),
+    mut checking_cycle: u32,
 ) -> Result<(), SyncError> {
     if crate::wallet::sync::proposal_locks::is_shutting_down() {
         return Ok(());
@@ -3416,6 +3453,7 @@ async fn run_sync_impl(
         .map_err(|e| SyncError::db(format!("suggest_scan_ranges: {e}")))?;
     let mut initial_total = pending_scan_blocks(&initial_ranges);
     progress_fn(SyncProgressEvent {
+        checking: checking_progress(checking_cycle, initial_total, initial_total, 0),
         remaining_scan_blocks: Some(initial_total),
         pending_scan_start_height: earliest_pending_scan_start(&initial_ranges),
         ..preparation_progress_event(current_tip_height, "chain_prepare", 0, 0)
@@ -3611,6 +3649,13 @@ async fn run_sync_impl(
                             current_tip_height = fresh_tip.height;
                             initial_total = pending_blocks;
                             prev_remaining = pending_blocks;
+                            if checking_cycle > 0 && pending_blocks > 0 {
+                                progress_fn(begin_checking(
+                                    &mut checking_cycle,
+                                    pending_blocks,
+                                    current_tip_height,
+                                ));
+                            }
                             queued_ranges = Some(repair_ranges);
                             completion_tip_validation_required = true;
                             continue;
@@ -3696,6 +3741,26 @@ async fn run_sync_impl(
                                 ))
                             })?;
                             current_tip_height = fresh_tip.height;
+                            let promoted_ranges = db.suggest_scan_ranges().map_err(|e| {
+                                SyncError::db(format!(
+                                    "suggest_scan_ranges after final tip advance: {e}"
+                                ))
+                            })?;
+                            reset_promoted_scan_progress(
+                                &promoted_ranges,
+                                &mut initial_total,
+                                &mut prev_remaining,
+                            );
+                            if initial_total > 0 {
+                                progress_fn(begin_checking(
+                                    &mut checking_cycle,
+                                    initial_total,
+                                    current_tip_height,
+                                ));
+                            }
+                            progress_display_mode = ProgressDisplayMode::Work;
+                            queued_ranges = Some(promoted_ranges);
+
                             completion_tip_validation_required = true;
                             continue;
                         }
@@ -3731,6 +3796,11 @@ async fn run_sync_impl(
                             current_tip_height = fresh_tip.height;
                             initial_total = repair_pending_blocks;
                             prev_remaining = repair_pending_blocks;
+                            progress_fn(begin_checking(
+                                &mut checking_cycle,
+                                repair_pending_blocks,
+                                current_tip_height,
+                            ));
                             queued_ranges = Some(repair_ranges);
                             completion_tip_validation_required = true;
                             continue;
@@ -3748,6 +3818,13 @@ async fn run_sync_impl(
                     force_witness_check_this_run = true;
                     initial_total = repair_pending_blocks;
                     prev_remaining = repair_pending_blocks;
+                    if repair_pending_blocks > 0 {
+                        progress_fn(begin_checking(
+                            &mut checking_cycle,
+                            repair_pending_blocks,
+                            current_tip_height,
+                        ));
+                    }
                     progress_display_mode = ProgressDisplayMode::TailRepair {
                         base_percentage: last_progress_percentage
                             .min(TAIL_REPAIR_MAX_START_PERCENTAGE),
@@ -3768,6 +3845,13 @@ async fn run_sync_impl(
                     force_witness_check_this_run = true;
                     initial_total = repair_pending_blocks;
                     prev_remaining = repair_pending_blocks;
+                    if repair_pending_blocks > 0 {
+                        progress_fn(begin_checking(
+                            &mut checking_cycle,
+                            repair_pending_blocks,
+                            current_tip_height,
+                        ));
+                    }
                     let repair_ranges = db.suggest_scan_ranges().map_err(|e| {
                         SyncError::db(format!("suggest_scan_ranges after anchor repair: {e}"))
                     })?;
@@ -3825,6 +3909,13 @@ async fn run_sync_impl(
                             &mut initial_total,
                             &mut prev_remaining,
                         );
+                        if initial_total > 0 {
+                            progress_fn(begin_checking(
+                                &mut checking_cycle,
+                                initial_total,
+                                current_tip_height,
+                            ));
+                        }
                         progress_display_mode = ProgressDisplayMode::Work;
                         queued_ranges = Some(promoted_ranges);
                         completion_tip_validation_required = true;
@@ -3914,6 +4005,12 @@ async fn run_sync_impl(
             pending_scan_start_height: earliest_pending_scan_start(&ranges),
             is_syncing: true,
             kind: SyncEventKind::Progress,
+            checking: checking_progress(
+                checking_cycle,
+                initial_total,
+                prev_remaining,
+                batch_blocks,
+            ),
             has_new_tx: false,
             phase_completed_units: 0,
             phase_total_units: 0,
@@ -4253,6 +4350,13 @@ async fn run_sync_impl(
                     if post_rewind_pending > 0 {
                         initial_total = post_rewind_pending;
                         prev_remaining = post_rewind_pending;
+                        if checking_cycle > 0 && post_rewind_pending > 0 {
+                            progress_fn(begin_checking(
+                                &mut checking_cycle,
+                                post_rewind_pending,
+                                current_tip_height,
+                            ));
+                        }
                         let rewind_start = earliest_pending_scan_start(&post_rewind_ranges)
                             .unwrap_or(actual_rewind_height_u64);
                         progress_display_mode = ProgressDisplayMode::ChainWindow {
@@ -4464,6 +4568,13 @@ async fn run_sync_impl(
                         current_tip_height = fresh_tip.height;
                         initial_total = pending_blocks;
                         prev_remaining = pending_blocks;
+                        if checking_cycle > 0 && pending_blocks > 0 {
+                            progress_fn(begin_checking(
+                                &mut checking_cycle,
+                                pending_blocks,
+                                current_tip_height,
+                            ));
+                        }
                         queued_ranges = Some(repair_ranges);
                         completion_tip_validation_required = true;
                         last_periodic_tip_refresh_attempt = std::time::Instant::now();
@@ -4577,6 +4688,12 @@ async fn run_sync_impl(
             pending_scan_start_height: earliest_pending_scan_start(&post_ranges),
             is_syncing: true,
             kind: SyncEventKind::Progress,
+            checking: checking_progress(
+                checking_cycle,
+                initial_total,
+                remaining,
+                next_display_target_blocks,
+            ),
             has_new_tx,
             phase_completed_units: 0,
             phase_total_units: 0,
@@ -4672,6 +4789,7 @@ async fn run_sync_impl(
         pending_scan_start_height: None,
         is_syncing: false,
         kind: SyncEventKind::Completed,
+        checking: None,
         has_new_tx: false,
         phase_completed_units: 0,
         phase_total_units: 0,
@@ -4817,6 +4935,7 @@ async fn run_sync_impl(
                 pending_scan_start_height: None,
                 is_syncing: false,
                 kind: SyncEventKind::Completed,
+                checking: None,
                 has_new_tx: true,
                 phase_completed_units: 0,
                 phase_total_units: 0,
@@ -4859,6 +4978,7 @@ async fn run_sync_impl(
                 pending_scan_start_height: None,
                 is_syncing: false,
                 kind: SyncEventKind::Completed,
+                checking: None,
                 has_new_tx: true,
                 phase_completed_units: 0,
                 phase_total_units: 0,
@@ -5129,6 +5249,28 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::{Barrier, Notify, Semaphore};
     use zcash_client_backend::proto::compact_formats::CompactBlock;
+
+    #[test]
+    fn checking_reports_only_additional_work_and_its_next_batch() {
+        assert!(checking_progress(0, 1000, 750, 100).is_none());
+        let mut cycle = 0;
+        let start = begin_checking(&mut cycle, 1000, 2000);
+        assert_eq!(start.kind, SyncEventKind::Progress);
+        assert_eq!(start.phase, "chain_prepare");
+        assert!(start.is_syncing);
+        assert_eq!(start.checking.unwrap().percentage, 0.0);
+        assert_eq!(start.remaining_scan_blocks, Some(1000));
+        let batch = checking_progress(cycle, 1000, 750, 100).unwrap();
+        assert_eq!(batch.percentage, 0.25);
+        assert_eq!(batch.display_target_percentage, 0.35);
+        assert_eq!(
+            checking_progress(cycle, 1000, 0, 0).unwrap().percentage,
+            1.0
+        );
+        let new_work = begin_checking(&mut cycle, 200, 2000).checking.unwrap();
+        assert_eq!(new_work.cycle, 2);
+        assert_eq!(new_work.percentage, 0.0);
+    }
 
     #[test]
     fn payment_link_scan_ranges_skip_idle_history_and_preserve_older_observers() {

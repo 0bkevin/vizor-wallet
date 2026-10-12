@@ -391,7 +391,10 @@ class _SyncKeepAwakeStatusScreen extends ConsumerWidget {
       SyncKeepAwakePrivacyLockMode.done => 'Vizor is synced',
       SyncKeepAwakePrivacyLockMode.interrupted => 'Vizor sync is paused',
       SyncKeepAwakePrivacyLockMode.hidden ||
-      SyncKeepAwakePrivacyLockMode.syncing => 'Vizor is syncing',
+      SyncKeepAwakePrivacyLockMode.syncing =>
+        ref.watch(syncDisplayCheckingCycleProvider) > 0
+            ? 'Vizor is checking'
+            : 'Vizor is syncing',
     };
 
     return Material(
@@ -495,7 +498,10 @@ class _SyncKeepAwakeDisplayProgressLockup extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final cycle = ref.watch(syncDisplayCheckingCycleProvider);
     return _SyncKeepAwakeProgressLockup(
+      key: ValueKey(cycle),
+      isChecking: cycle > 0,
       progress: ref.watch(syncDisplayPercentageProvider),
     );
   }
@@ -619,6 +625,7 @@ class _SyncKeepAwakePasscodeConfirmScreen extends StatelessWidget {
                 builder: (context, ref, _) => MobileTopNav.back(
                   title: _titleForMode(
                     ref.watch(syncDisplayWholePercentageProvider),
+                    isChecking: ref.watch(syncDisplayCheckingCycleProvider) > 0,
                   ),
                   titleStyle: AppTypography.bodyMediumStrong.copyWith(
                     color: colors.text.accent,
@@ -691,13 +698,15 @@ class _SyncKeepAwakePasscodeConfirmScreen extends StatelessWidget {
     );
   }
 
-  String _titleForMode(int displayWholePercentage) {
+  String _titleForMode(int displayWholePercentage, {required bool isChecking}) {
     return switch (mode) {
       SyncKeepAwakePrivacyLockMode.done => 'Synced',
       SyncKeepAwakePrivacyLockMode.interrupted => 'Sync paused',
       SyncKeepAwakePrivacyLockMode.hidden ||
-      SyncKeepAwakePrivacyLockMode.syncing =>
-        '$displayWholePercentage% Syncing...',
+      SyncKeepAwakePrivacyLockMode.syncing => formatSyncProgressLabel(
+        displayWholePercentage,
+        isChecking: isChecking,
+      ),
     };
   }
 
@@ -786,11 +795,16 @@ class _SyncKeepAwakeStatusLockup extends StatelessWidget {
 }
 
 class _SyncKeepAwakeProgressLockup extends StatelessWidget {
-  const _SyncKeepAwakeProgressLockup({required this.progress});
+  const _SyncKeepAwakeProgressLockup({
+    super.key,
+    required this.progress,
+    required this.isChecking,
+  });
 
   static const _progressAnimationDuration = Duration(milliseconds: 420);
 
   final double progress;
+  final bool isChecking;
 
   @override
   Widget build(BuildContext context) {
@@ -834,7 +848,7 @@ class _SyncKeepAwakeProgressLockup extends StatelessWidget {
                   child: SizedBox(
                     width: SyncKeepAwakePrivacyLockScreen._bodyWidth,
                     child: Text(
-                      'Vizor is syncing',
+                      isChecking ? 'Vizor is checking' : 'Vizor is syncing',
                       textAlign: TextAlign.center,
                       style: AppTypography.bodyMediumStrong.copyWith(
                         color: colors.text.primary,

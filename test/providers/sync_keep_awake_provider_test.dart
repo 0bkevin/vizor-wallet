@@ -10,6 +10,41 @@ import 'package:zcash_wallet/src/providers/sync_provider.dart';
 import '../fakes/fake_sync_notifier.dart';
 
 void main() {
+  test(
+    'Checking keeps the screen awake and cannot complete from old heights',
+    () {
+      final sync = SyncState(
+        isSyncing: true,
+        percentage: 1,
+        scannedHeight: 2000,
+        chainTipHeight: 2000,
+        remainingScanBlocks: 100,
+        lastSyncStartedAt: DateTime.utc(2026, 10, 12),
+        checking: const SyncCheckingProgress(
+          cycle: 1,
+          percentage: 0,
+          displayTargetPercentage: 0.25,
+        ),
+      );
+      expect(isSyncKeepAwakeActiveSync(sync), isTrue);
+      expect(isSyncKeepAwakeCompletedSync(sync), isFalse);
+      expect(
+        isSyncKeepAwakeCompletedSync(sync.copyWith(isSyncing: false)),
+        isFalse,
+      );
+      expect(
+        isSyncKeepAwakeCompletedSync(
+          sync.copyWith(
+            isSyncing: false,
+            isSyncComplete: true,
+            clearChecking: true,
+          ),
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('settings provider starts from bootstrap keep-awake fields', () {
     final container = ProviderContainer(
       overrides: [

@@ -247,7 +247,7 @@ bool isSyncKeepAwakeEligibleSync(SyncState sync) {
 bool isSyncKeepAwakeActiveSync(SyncState sync) {
   if (!sync.isSyncing ||
       sync.isBackgroundMode ||
-      sync.percentage >= 1 ||
+      (!sync.isChecking && sync.percentage >= 1) ||
       sync.lastSyncStartedAt == null) {
     return false;
   }
@@ -255,11 +255,11 @@ bool isSyncKeepAwakeActiveSync(SyncState sync) {
   // Until this run's scan queue is known, old heights and the next batch
   // size cannot prove this is a small catch-up. This also covers preparation
   // after retries and importing an account into a previously synced wallet.
-  return !isNearTipCatchUp(sync);
+  return sync.isChecking || !isNearTipCatchUp(sync);
 }
 
 bool isSyncKeepAwakeCompletedSync(SyncState sync) {
-  if (sync.isSyncing || sync.isBackgroundMode) return false;
+  if (sync.isSyncing || sync.isBackgroundMode || sync.isChecking) return false;
   if (sync.isSyncComplete || sync.percentage >= 1) return true;
   return sync.chainTipHeight > 0 && sync.scannedHeight >= sync.chainTipHeight;
 }

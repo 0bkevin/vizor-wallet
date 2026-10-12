@@ -88,6 +88,64 @@ const _fingerprintBiometricState = BiometricUnlockState(
 );
 
 void main() {
+  setUpAll(() async {
+    final loader = FontLoader('Geist')
+      ..addFont(rootBundle.load('assets/fonts/Geist-Regular.ttf'))
+      ..addFont(rootBundle.load('assets/fonts/Geist-Medium.ttf'))
+      ..addFont(rootBundle.load('assets/fonts/Geist-SemiBold.ttf'));
+    await loader.load();
+  });
+
+  testWidgets(
+    'Checking stays awake and fits privacy and passcode screens at narrow width',
+    (tester) async {
+      _setMobileViewport(tester, size: const Size(320, 852));
+      final initial = _sync(
+        percentage: 0.99,
+        lastSyncStartedAt: DateTime.utc(2026, 10, 12),
+      );
+      final notifier = FakeSyncNotifier(initial);
+      await tester.pumpWidget(_app(syncNotifier: notifier));
+      await _settleInitialSync(tester);
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.pump();
+      expect(find.text('Vizor is syncing'), findsOneWidget);
+      final checking = initial.copyWith(
+        percentage: 1,
+        scannedHeight: 200,
+        chainTipHeight: 200,
+        remainingScanBlocks: 100,
+        checking: const SyncCheckingProgress(
+          cycle: 1,
+          percentage: 0.25,
+          displayTargetPercentage: 0.25,
+        ),
+      );
+      notifier.emit(checking);
+      await tester.pump();
+      // The ring changes its cycle key: the old 99% tween is discarded.
+      expect(find.text('25%'), findsOneWidget);
+      expect(find.text('Vizor is checking'), findsOneWidget);
+      expect(find.text('Sync Complete'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Unlock Vizor'));
+      await tester.pumpAndSettle();
+      expect(find.text('25% Checking'), findsOneWidget);
+      expect(find.text('Synced'), findsNothing);
+      expect(tester.takeException(), isNull);
+      notifier.emit(
+        checking.copyWith(
+          isSyncing: false,
+          isSyncComplete: true,
+          clearChecking: true,
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Synced'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets(
     'idle privacy lock dismisses the numeric keyboard and native control',
     (tester) async {
