@@ -53,7 +53,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('75% Checking'), findsOneWidget);
+    expect(find.text('75% checking'), findsOneWidget);
     expect(find.text('99% Syncing...'), findsNothing);
     expect(tester.takeException(), isNull);
   });

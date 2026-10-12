@@ -96,7 +96,7 @@ class SyncStatusLabel {
 }
 
 String formatSyncProgressLabel(Object percentage, {required bool isChecking}) =>
-    isChecking ? '$percentage% Checking' : '$percentage% Syncing...';
+    isChecking ? '$percentage% checking' : '$percentage% Syncing...';
 
 /// Whether Tor is where the route is heading. A disable in progress keeps
 /// `torEnabled` true while it drains, so the flag alone would read a route

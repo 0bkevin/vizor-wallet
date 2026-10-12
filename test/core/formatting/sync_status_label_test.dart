@@ -17,10 +17,10 @@ void main() {
           displayTargetPercentage: 0.5,
         ),
       );
-      expect(SyncStatusLabel.from(sync).label, '25% Checking');
+      expect(SyncStatusLabel.from(sync).label, '25% checking');
       expect(
         SyncStatusLabel.from(sync, displayWholePercentage: 40).label,
-        '40% Checking',
+        '40% checking',
       );
       expect(SyncStatusLabel.from(sync).semanticsLabel, 'Checking 25 percent');
       expect(
@@ -53,7 +53,7 @@ void main() {
           displayTargetPercentage: 0.25,
         ),
       );
-      expect(SyncStatusLabel.from(sync).label, '25% Checking');
+      expect(SyncStatusLabel.from(sync).label, '25% checking');
       expect(
         SyncStatusLabel.from(
           sync.copyWith(isSyncComplete: true, clearChecking: true),

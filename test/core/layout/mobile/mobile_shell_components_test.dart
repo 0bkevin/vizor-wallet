@@ -31,13 +31,13 @@ void main() {
       _harness(
         MobileTopNav.account(
           accountName: 'Account1',
-          syncLabel: '99% Checking',
+          syncLabel: '99% checking',
           syncAnimated: true,
         ),
       ),
     );
     await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('99% Checking'), findsOneWidget);
+    expect(find.text('99% checking'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

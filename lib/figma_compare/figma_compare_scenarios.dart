@@ -2138,7 +2138,7 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
   ),
   FigmaCompareScenario(
     id: 'mobile-home-checking',
-    description: 'Mobile home with additional sync work at 75% Checking',
+    description: 'Mobile home with additional sync work at 75% checking',
     builder: buildMobileHomeCheckingUseCase,
     desktop: false,
     mobile: true,
@@ -2458,7 +2458,7 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
   ),
   FigmaCompareScenario(
     id: 'desktop-home-checking',
-    description: 'Desktop home with additional sync work at 75% Checking',
+    description: 'Desktop home with additional sync work at 75% checking',
     builder: buildDesktopHomeCheckingUseCase,
     platform: TargetPlatform.macOS,
   ),
