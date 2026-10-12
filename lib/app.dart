@@ -97,6 +97,7 @@ import 'src/features/payment_links/providers/payment_link_intake_provider.dart';
 import 'src/features/payment_links/providers/gift_claim_flow_provider.dart';
 import 'src/features/payment_links/screens/gift_claim_screen.dart';
 import 'src/features/payment_links/screens/desktop_payment_link_scan_screen.dart';
+import 'src/features/send/screens/payment_request_scan_screen.dart';
 import 'src/features/payment_links/screens/desktop_gift_password_screen.dart';
 import 'src/features/payment_links/screens/desktop_gift_customise_screen.dart';
 import 'src/features/payment_links/screens/gift_customise_account_screen.dart'
@@ -1475,6 +1476,12 @@ List<RouteBase> _desktopRoutes(Ref ref) => [
     ),
   ),
   GoRoute(
+    path: '/send/request-scan',
+    builder: (_, state) => PaymentRequestScanScreen(
+      networkName: state.uri.queryParameters['network'] ?? 'main',
+    ),
+  ),
+  GoRoute(
     path: '/payment-links/scan',
     builder: (_, state) => DesktopPaymentLinkScanScreen(
       networkName: state.uri.queryParameters['network'] ?? 'main',
@@ -2473,7 +2480,7 @@ class _IncomingLinkHostState extends ConsumerState<_IncomingLinkHost> {
         // The request is presented over the current screen, not navigated to.
         ref
             .read(paymentRequestFlowProvider.notifier)
-            .present(prefill!, source: PaymentRequestSource.link);
+            .present(prefill!, source: prefill.requestSource);
     }
   }
 

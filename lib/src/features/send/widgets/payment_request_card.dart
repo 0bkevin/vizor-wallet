@@ -14,7 +14,10 @@ import '../../../core/widgets/pool_badge.dart';
 import '../../../core/widgets/review_list_row.dart'
     show kPaymentRequestRequesterTooltip;
 import '../../../core/widgets/review_wrap_card.dart';
+import '../models/send_prefill_args.dart' show PaymentRequestSource;
 import 'send_review_layout.dart';
+
+export '../models/send_prefill_args.dart' show PaymentRequestSource;
 
 /// Desktop width of the payment-request modal card.
 ///
@@ -71,12 +74,6 @@ const kPaymentRequestRequesterNoteScrollbarKey = ValueKey(
 /// (the Widgetbook gallery and the figma-compare scenarios), the same
 /// exemption the `*Desktop` / `*Mobile` token sets carry.
 enum PaymentRequestLayout { auto, desktop, mobile }
-
-/// Where a payment request reached the wallet from.
-///
-/// Carried by the view model for the routes and logs that care; the card
-/// itself renders no provenance line.
-enum PaymentRequestSource { link, qrCode }
 
 /// The one condition that decides whether the request can be acted on.
 ///
