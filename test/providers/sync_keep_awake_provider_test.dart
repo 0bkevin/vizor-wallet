@@ -10,40 +10,57 @@ import 'package:zcash_wallet/src/providers/sync_provider.dart';
 import '../fakes/fake_sync_notifier.dart';
 
 void main() {
-  test(
-    'Checking keeps the screen awake and cannot complete from old heights',
-    () {
-      final sync = SyncState(
-        isSyncing: true,
+  test('keep-awake finishes with the main scan and ignores Checking', () {
+    final sync = SyncState(
+      isSyncing: true,
+      percentage: 1,
+      scannedHeight: 2000,
+      chainTipHeight: 2000,
+      remainingScanBlocks: 100,
+      lastSyncStartedAt: DateTime.utc(2026, 10, 12),
+    );
+    for (final checking in [
+      null,
+      const SyncCheckingProgress(
+        cycle: 1,
+        percentage: 0,
+        displayTargetPercentage: 0.25,
+      ),
+      const SyncCheckingProgress(
+        cycle: 2,
+        percentage: 0.5,
+        displayTargetPercentage: 0.75,
+      ),
+      const SyncCheckingProgress(
+        cycle: 3,
         percentage: 1,
-        scannedHeight: 2000,
-        chainTipHeight: 2000,
-        remainingScanBlocks: 100,
-        lastSyncStartedAt: DateTime.utc(2026, 10, 12),
-        checking: const SyncCheckingProgress(
-          cycle: 1,
-          percentage: 0,
-          displayTargetPercentage: 0.25,
-        ),
-      );
-      expect(isSyncKeepAwakeActiveSync(sync), isTrue);
-      expect(isSyncKeepAwakeCompletedSync(sync), isFalse);
+        displayTargetPercentage: 1,
+      ),
+    ]) {
+      final state = sync.copyWith(checking: checking);
+      expect(isSyncKeepAwakeActiveSync(state), isFalse);
+      expect(isSyncKeepAwakeCompletedSync(state), isTrue);
       expect(
-        isSyncKeepAwakeCompletedSync(sync.copyWith(isSyncing: false)),
-        isFalse,
-      );
-      expect(
-        isSyncKeepAwakeCompletedSync(
-          sync.copyWith(
-            isSyncing: false,
-            isSyncComplete: true,
-            clearChecking: true,
-          ),
-        ),
+        isSyncKeepAwakeCompletedSync(state.withSyncActivityStopped()),
         isTrue,
       );
-    },
-  );
+      expect(
+        shouldShowSyncKeepAwakePrompt(
+          sync: state,
+          settings: const SyncKeepAwakeSettings(
+            enabled: false,
+            promptSeen: false,
+          ),
+          now: state.lastSyncStartedAt!.add(const Duration(minutes: 10)),
+        ),
+        isFalse,
+      );
+    }
+    expect(
+      isSyncKeepAwakeCompletedSync(sync.copyWith(isBackgroundMode: true)),
+      isFalse,
+    );
+  });
 
   test('settings provider starts from bootstrap keep-awake fields', () {
     final container = ProviderContainer(
@@ -61,7 +78,7 @@ void main() {
     );
   });
 
-  test('a drained main scan stays awake while retry work is unknown', () {
+  test('a drained main scan does not stay awake during retry preparation', () {
     final sync = SyncState(
       isSyncing: true,
       percentage: 1,
@@ -70,22 +87,12 @@ void main() {
       chainTipHeight: 2000,
       lastSyncStartedAt: DateTime.utc(2026, 10, 12),
     );
-    expect(isSyncKeepAwakeActiveSync(sync), isTrue);
-    expect(isSyncKeepAwakeCompletedSync(sync), isFalse);
+    expect(isSyncKeepAwakeActiveSync(sync), isFalse);
+    expect(isSyncKeepAwakeCompletedSync(sync), isTrue);
     expect(
       isSyncKeepAwakeActiveSync(sync.copyWith(remainingScanBlocks: 0)),
       isFalse,
     );
-    final checking = sync.copyWith(
-      remainingScanBlocks: 0,
-      checking: const SyncCheckingProgress(
-        cycle: 1,
-        percentage: 1,
-        displayTargetPercentage: 1,
-      ),
-    );
-    expect(isSyncKeepAwakeActiveSync(checking), isTrue);
-    expect(isSyncKeepAwakeCompletedSync(checking), isFalse);
   });
 
   test('near-tip catch-up requires known pending work at the chain tip', () {

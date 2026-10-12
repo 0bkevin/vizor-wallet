@@ -97,7 +97,7 @@ void main() {
   });
 
   testWidgets(
-    'Checking stays awake and fits privacy and passcode screens at narrow width',
+    'main scan completion stays done through Checking and unlock confirmation',
     (tester) async {
       _setMobileViewport(tester, size: const Size(320, 852));
       final initial = _sync(
@@ -110,63 +110,72 @@ void main() {
       await tester.pump(const Duration(milliseconds: 60));
       await tester.pump();
       expect(find.text('Vizor is syncing'), findsOneWidget);
-      final checking = initial.copyWith(
+
+      final mainDrained = initial.copyWith(
         percentage: 1,
         scannedHeight: 200,
         chainTipHeight: 200,
+        remainingScanBlocks: 0,
+      );
+      notifier.emit(mainDrained);
+      await tester.pump();
+      expect(find.text('Sync Complete'), findsOneWidget);
+      expect(find.text('Vizor is syncing'), findsNothing);
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(SyncKeepAwakePrivacyLockHost)),
+      );
+      expect(container.read(syncKeepAwakeActiveProvider), isFalse);
+      expect(container.read(syncKeepAwakePrivacyLockProvider).isLocked, isTrue);
+
+      final checking = mainDrained.copyWith(
         remainingScanBlocks: 100,
         checking: const SyncCheckingProgress(
           cycle: 1,
           percentage: 0.25,
-          displayTargetPercentage: 0.25,
+          displayTargetPercentage: 0.5,
         ),
       );
       notifier.emit(checking);
       await tester.pump();
-      // The ring changes its cycle key: the old 99% tween is discarded.
-      expect(find.text('25%'), findsOneWidget);
-      expect(find.text('Vizor is checking'), findsOneWidget);
-      expect(find.text('Sync Complete'), findsNothing);
+      expect(find.text('Sync Complete'), findsOneWidget);
+      expect(find.text('Vizor is checking'), findsNothing);
+      expect(find.textContaining('%'), findsNothing);
+      await tester.tap(find.text('Unlock Vizor'));
+      await tester.pumpAndSettle();
+      expect(find.text('Synced'), findsOneWidget);
       expect(tester.takeException(), isNull);
+
       notifier.emit(
         checking.copyWith(
           checking: const SyncCheckingProgress(
             cycle: 2,
-            percentage: 0.1,
+            percentage: 0.05,
             displayTargetPercentage: 0.1,
           ),
         ),
       );
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('Synced'), findsOneWidget);
+      expect(find.textContaining('%'), findsNothing);
+      notifier.emit(checking.withSyncActivityStopped());
       await tester.pump();
-      // A retry queue replaces the ring's old tween immediately, even when
-      // both the old and new labels are Checking.
-      expect(find.text('10%'), findsOneWidget);
-      expect(find.text('Vizor is checking'), findsOneWidget);
-      await tester.tap(find.text('Unlock Vizor'));
-      await tester.pumpAndSettle();
-      expect(find.text('10% Checking'), findsOneWidget);
-      expect(find.text('Synced'), findsNothing);
-      expect(tester.takeException(), isNull);
+      expect(find.text('Synced'), findsOneWidget);
       notifier.emit(
-        checking.copyWith(
-          checking: const SyncCheckingProgress(
-            cycle: 3,
-            percentage: 0.05,
-            displayTargetPercentage: 0.05,
-          ),
-        ),
-      );
-      await tester.pump();
-      expect(find.text('5% Checking'), findsOneWidget);
-      notifier.emit(
-        checking.copyWith(
-          isSyncing: false,
-          isSyncComplete: true,
-          clearChecking: true,
-        ),
+        mainDrained.copyWith(isSyncing: false, isSyncComplete: true),
       );
       await tester.pump();
       expect(find.text('Synced'), findsOneWidget);
+
+      notifier.emit(
+        initial.copyWith(
+          percentage: 0.25,
+          lastSyncStartedAt: DateTime.utc(2026, 10, 12, 0, 1),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('25% Syncing...'), findsOneWidget);
+      expect(find.text('Synced'), findsNothing);
+      expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
   );

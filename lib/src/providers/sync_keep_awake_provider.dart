@@ -182,11 +182,11 @@ final syncKeepAwakePrivacyLockModeProvider =
         return SyncKeepAwakePrivacyLockMode.hidden;
       }
       final sync = ref.watch(syncProvider).asData?.value;
-      if (sync?.isSyncing == true && sync?.isBackgroundMode != true) {
-        return SyncKeepAwakePrivacyLockMode.syncing;
-      }
       if (sync != null && isSyncKeepAwakeCompletedSync(sync)) {
         return SyncKeepAwakePrivacyLockMode.done;
+      }
+      if (sync?.isSyncing == true && sync?.isBackgroundMode != true) {
+        return SyncKeepAwakePrivacyLockMode.syncing;
       }
       return SyncKeepAwakePrivacyLockMode.interrupted;
     });
@@ -247,9 +247,7 @@ bool isSyncKeepAwakeEligibleSync(SyncState sync) {
 bool isSyncKeepAwakeActiveSync(SyncState sync) {
   if (!sync.isSyncing ||
       sync.isBackgroundMode ||
-      (!sync.isChecking &&
-          sync.percentage >= 1 &&
-          sync.remainingScanBlocks != null) ||
+      sync.percentage >= 1 ||
       sync.lastSyncStartedAt == null) {
     return false;
   }
@@ -257,12 +255,16 @@ bool isSyncKeepAwakeActiveSync(SyncState sync) {
   // Until this run's scan queue is known, old heights and the next batch
   // size cannot prove this is a small catch-up. This also covers preparation
   // after retries and importing an account into a previously synced wallet.
-  return sync.isChecking || !isNearTipCatchUp(sync);
+  return !isNearTipCatchUp(sync);
 }
 
 bool isSyncKeepAwakeCompletedSync(SyncState sync) {
-  if (sync.isSyncing || sync.isBackgroundMode || sync.isChecking) return false;
-  if (sync.isSyncComplete || sync.percentage >= 1) return true;
+  if (sync.isBackgroundMode) return false;
+  // Keep-awake covers the main scan only. Final Checking work does not delay
+  // its completion screen or reactivate the native screen-awake setting.
+  if (sync.percentage >= 1) return true;
+  if (sync.isSyncing) return false;
+  if (sync.isSyncComplete) return true;
   return sync.chainTipHeight > 0 && sync.scannedHeight >= sync.chainTipHeight;
 }
 
