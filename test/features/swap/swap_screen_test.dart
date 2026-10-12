@@ -4258,6 +4258,170 @@ void main() {
     }
   }
 
+  for (final (savedForm, savedAsset, deprecatedSymbol) in [
+    ('static', SwapAsset.usdc, 'USDC_(DEPRECATED)'),
+    ('string', SwapAsset.fromPersistedJson('usdc')!, 'USDC(deprecated)'),
+    (
+      'map',
+      SwapAsset.fromPersistedJson(SwapAsset.usdc.toPersistedJson())!,
+      'USDC (Deprecated)',
+    ),
+  ]) {
+    for (final preferencesFirst in [true, false]) {
+      for (final payMode in [false, true]) {
+        final order = preferencesFirst ? 'preferences first' : 'pricing first';
+        final flow = payMode ? 'Pay' : 'Swap';
+        testWidgets(
+          'ID-less deprecated $flow preference is reconciled ($savedForm, $order)',
+          (tester) async {
+            await _setDesktopViewport(tester);
+            final deprecatedAsset = SwapAsset.live(
+              assetId: 'deprecated-usdc-eth',
+              symbol: deprecatedSymbol,
+              blockchain: 'eth',
+              decimals: 6,
+            );
+            late final _FakeSwapPersistenceStore store;
+            late final VoidCallback completePreferences;
+            if (payMode) {
+              final delayedStore = _DelayedPayAssetLoadSwapPersistenceStore(
+                initialIntents: const [],
+                initialPayAsset: savedAsset,
+              );
+              store = delayedStore;
+              completePreferences = delayedStore.completePayAssetLoad;
+            } else {
+              final delayedStore = _DelayedComposerPreferencesStore(
+                initialPreferences: SwapComposerPreferences(
+                  direction: SwapDirection.zecToExternal,
+                  externalAsset: savedAsset,
+                ),
+                initialPayAsset: savedAsset,
+              );
+              store = delayedStore;
+              completePreferences = delayedStore.completePreferencesLoad;
+            }
+            final provider = _DeferredCatalogPricingSwapProvider(
+              supportedAssets: [deprecatedAsset, SwapAsset.eth],
+              usdPrices: {SwapAsset.zec: 100, SwapAsset.eth: 2500},
+            );
+            await tester.pumpWidget(
+              _routerHarness(
+                GoRouter(
+                  initialLocation: payMode ? '/pay' : '/swap',
+                  routes: [_swapRoute(), _payRoute()],
+                ),
+                seedSwapActivityFixtures: false,
+                sessionStore: store,
+                swapProvider: provider,
+              ),
+            );
+            await tester.pumpAndSettle();
+            final container = ProviderScope.containerOf(
+              tester.element(
+                payMode ? find.byType(PayScreen) : find.byType(SwapScreen),
+              ),
+              listen: false,
+            );
+            if (preferencesFirst) {
+              completePreferences();
+              await tester.pumpAndSettle();
+              provider.completePricing();
+            } else {
+              provider.completePricing();
+              await tester.pumpAndSettle();
+              completePreferences();
+            }
+            await tester.pumpAndSettle();
+
+            final state = container.read(swapStateProvider);
+            expect(state.supportedExternalAssets, [SwapAsset.eth]);
+            expect(state.externalAsset, SwapAsset.eth);
+            expect(state.externalAssetIsAvailable, isTrue);
+            expect(container.read(paySelectedAssetProvider), SwapAsset.eth);
+            expect(find.text(savedAsset.symbol), findsNothing);
+            expect(find.text(deprecatedAsset.symbol), findsNothing);
+          },
+        );
+      }
+    }
+  }
+
+  for (final (difference, symbol, chain, decimals, savedAsset) in [
+    ('chain', 'ETH_(DEPRECATED)', 'base', 18, SwapAsset.eth),
+    ('decimals', 'ETH_(DEPRECATED)', 'eth', 8, SwapAsset.eth),
+    ('symbol', 'E_TH_(DEPRECATED)', 'eth', 18, SwapAsset.eth),
+    ('active contract', 'ETH_(DEPRECATED)', 'eth', 18, SwapAsset.eth),
+    (
+      'provider ID',
+      'ETH_(DEPRECATED)',
+      'eth',
+      18,
+      SwapAsset.live(
+        assetId: 'active-eth',
+        symbol: 'ETH',
+        blockchain: 'eth',
+        decimals: 18,
+      ),
+    ),
+  ]) {
+    testWidgets('deprecated matching preserves a different $difference', (
+      tester,
+    ) async {
+      await _setDesktopViewport(tester);
+      final supportsSavedMarket = difference == 'active contract';
+      final activeEth = SwapAsset.live(
+        assetId: 'active-eth',
+        symbol: 'ETH',
+        blockchain: 'eth',
+        decimals: 18,
+      );
+      final deprecatedAsset = SwapAsset.live(
+        assetId: 'deprecated-eth',
+        symbol: symbol,
+        blockchain: chain,
+        decimals: decimals,
+      );
+      final store = _DelayedComposerPreferencesStore(
+        initialPreferences: SwapComposerPreferences(
+          direction: SwapDirection.zecToExternal,
+          externalAsset: savedAsset,
+        ),
+      );
+      await tester.pumpWidget(
+        _routerHarness(
+          GoRouter(initialLocation: '/swap', routes: [_swapRoute()]),
+          seedSwapActivityFixtures: false,
+          sessionStore: store,
+          swapProvider: _FakeSwapProvider(
+            supportedAssets: [
+              SwapAsset.usdc,
+              if (supportsSavedMarket) activeEth,
+              deprecatedAsset,
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      store.completePreferencesLoad();
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(SwapScreen)),
+        listen: false,
+      );
+      final state = container.read(swapStateProvider);
+      expect(state.supportedExternalAssets, [
+        SwapAsset.usdc,
+        if (supportsSavedMarket) activeEth,
+      ]);
+      // Ordinary unsupported preferences must not be mistaken for deprecated
+      // selections just because another market or provider ID was deprecated.
+      expect(state.externalAsset, supportsSavedMarket ? activeEth : savedAsset);
+      expect(state.externalAssetIsAvailable, supportsSavedMarket);
+    });
+  }
+
   testWidgets('a fully deprecated catalog leaves no selectable assets', (
     tester,
   ) async {
