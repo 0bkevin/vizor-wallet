@@ -1898,6 +1898,8 @@ class _PaymentLinksScreenState extends ConsumerState<PaymentLinksScreen>
             ref
                 .read(paymentLinkClaimCoordinatorProvider)
                 .isSubmitting(inFlightAddress))) {
+      // The durable claim already owns this card; let intake open the next one.
+      _releaseIntakePreview();
       setState(() {
         if (knownAddress != null) _rememberReceivedLink(link);
         _setReceivedCardStatus(

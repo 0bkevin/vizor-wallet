@@ -3027,6 +3027,83 @@ void main() {
     expect(operations.discardedClaimAddresses, isEmpty);
   });
 
+  for (final status in [
+    PaymentLinkReceivedStatus.submitting,
+    PaymentLinkReceivedStatus.receiving,
+  ]) {
+    for (final queuedTogether in [false, true]) {
+      testWidgets(
+        'opens the next Gift Card after an in-flight duplicate '
+        '(${status.name}, ${queuedTogether ? 'queued together' : 'arrives later'})',
+        (tester) async {
+          final operations = FakePaymentLinkOperations(
+            receivedRecords: [
+              PaymentLinkReceivedRecord(
+                claimSubmittedAt: DateTime.utc(2026, 8, 28),
+                network: incomingLink.network,
+                address: incomingLink.address,
+                amountZatoshi: incomingLink.amountZatoshi,
+                createdAt: incomingLink.createdAt,
+                artworkId: incomingLink.presentation?.artworkId,
+                message: incomingLink.presentation?.message,
+                status: status,
+                claimLink: incomingLink,
+                destinationAccountUuid: 'account-1',
+                claimTxids: status == PaymentLinkReceivedStatus.receiving
+                    ? 'existing-claim-tx'
+                    : null,
+                updatedAt: DateTime.utc(2026, 8, 28),
+              ),
+            ],
+          );
+          await pumpPaymentLinksScreen(
+            tester,
+            operations: operations,
+            bootstrap: homeBootstrap,
+          );
+          final container = ProviderScope.containerOf(
+            tester.element(find.byType(MaterialApp)),
+          );
+          final intake = container.read(paymentLinkIntakeProvider.notifier);
+
+          expect(
+            intake.receive(incomingLink.toUri().toString()),
+            PaymentLinkIntakeResult.accepted,
+          );
+          if (!queuedTogether) {
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 500));
+            await tester.pump();
+            expect(operations.preparedLinks, isEmpty);
+          }
+          expect(
+            intake.receive(secondIncomingLink.toUri().toString()),
+            PaymentLinkIntakeResult.accepted,
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+
+          expect(operations.preparedLinks, hasLength(1));
+          expect(
+            operations.preparedLinks.single.hasSameCanonicalPayload(
+              secondIncomingLink,
+            ),
+            isTrue,
+          );
+          expect(
+            container.read(paymentLinkIntakeProvider).pendingLinks,
+            isEmpty,
+          );
+          expect(operations.discardedClaimAddresses, isEmpty);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
   testWidgets(
     'loads Created and Received in parallel before consuming an incoming link',
     (tester) async {
