@@ -835,7 +835,6 @@ void main() {
       refreshListenable: refresh,
       routes: [
         GoRoute(path: '/', builder: (_, _) => const Text('birthday route')),
-        GoRoute(path: '/welcome', builder: (_, _) => const Text('welcome')),
         GoRoute(path: '/home', builder: (_, _) => const Text('home route')),
         mobileOnboardingRoutes().whereType<GoRoute>().singleWhere(
           (route) => route.path == '/onboarding/customise-account',
@@ -877,8 +876,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(accountNotifier.createdMnemonic, _mnemonic);
+    // A refresh during setup rebuilds the route without its arguments, which
+    // replaces the screen with an error view and never reaches Home.
+    expect(find.byType(ErrorWidget), findsNothing);
     expect(find.text('home route'), findsOneWidget);
-    expect(find.text('welcome'), findsNothing);
   });
 
   testWidgets('imports a software draft with the selected persona', (
