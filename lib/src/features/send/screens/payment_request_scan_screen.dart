@@ -112,6 +112,15 @@ class _PaymentRequestScanScreenState extends State<PaymentRequestScanScreen> {
                         error: _error,
                         unavailableMessage:
                             'Connect a camera, or go back and review the link details.',
+                        permissionDescription:
+                            'A camera is required to scan the payment request QR code.\n'
+                            'You can change camera access in settings at any time.',
+                        troubleScanningTips: const [
+                          'Open the requester’s original QR code full screen on another device.',
+                          'Move the QR code a few inches further from the camera so it can focus.',
+                          "Make sure the room is well-lit and the QR code isn't reflecting glare.",
+                          'On a Mac, you can use Continuity Camera to scan with your iPhone instead.',
+                        ],
                       ),
                     ],
                   ),
