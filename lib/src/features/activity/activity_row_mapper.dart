@@ -9,6 +9,7 @@ import '../../rust/api/sync.dart' as rust_sync;
 import 'activity_amount_text.dart';
 import 'gift_card_activity_index.dart';
 import 'models/activity_row_data.dart';
+import 'transaction_completeness.dart';
 
 const _activityAmountPrivacyMaskLength = 3;
 
@@ -34,6 +35,7 @@ ActivityRowData buildTransactionActivityRow({
   String? pendingLabel,
   bool showPendingEstimate = true,
   bool privacyModeEnabled = false,
+  bool privateQueriesEnabled = false,
   bool dateOnlyTimestamp = false,
   VoidCallback? onTap,
 }) {
@@ -56,12 +58,21 @@ ActivityRowData buildTransactionActivityRow({
       ? transactionActivityPool(transaction)
       : giftCardDisplayPool ?? transactionActivityPool(transaction);
   final signedAmount = isSent ? -amount : amount;
+  // A balance movement is shown neutrally, without claiming a payment or
+  // a destination pool, even when its exact fee is known.
+  final isNetChange =
+      giftCardKind == null &&
+      giftCardAmountZatoshi == null &&
+      transactionFeePresentation(transaction) !=
+          TransactionFeePresentation.separate;
   final replacesPool =
       showPendingEstimate && isPending && (isInbound || isSent);
   final subtitle = replacesPool
       ? pendingLabel ?? 'Checking status'
       : isMigration
       ? 'Orchard → Ironwood'
+      : isNetChange
+      ? null
       : isInbound || isSent
       ? _poolLabel(normalizeActivityPool(displayPool), ordinary: isPayment)
       : null;
@@ -94,6 +105,8 @@ ActivityRowData buildTransactionActivityRow({
                 ? 'Sending'
                 : 'Receiving',
           )
+        : isNetChange
+        ? kNetChangeText
         : _txTitle(kind),
     leadingIconName: giftCardKind != null && !isInFlight
         ? AppIcons.giftCard
@@ -107,6 +120,8 @@ ActivityRowData buildTransactionActivityRow({
                   subtitle == 'Taking longer'
               ? AppIcons.time
               : null)
+        : isNetChange
+        ? null
         : _poolIcon(normalizeActivityPool(displayPool), ordinary: isPayment),
     amountText: activityAmountTextForFormFactor(
       _transactionAmountText(
@@ -127,7 +142,12 @@ ActivityRowData buildTransactionActivityRow({
         : isInbound
         ? colors.text.positiveStrong
         : outgoingAmountColor(colors),
-    amountSubtitle: isFailed && amount != BigInt.zero ? 'Refunded' : null,
+    amountSubtitle: isFailed && amount != BigInt.zero
+        ? 'Refunded'
+        : privateQueriesEnabled &&
+              transactionActivitySummaryIncomplete(transaction)
+        ? kIncompleteDetailsText
+        : null,
     statusText: isFailed
         ? 'Failed'
         : isPending

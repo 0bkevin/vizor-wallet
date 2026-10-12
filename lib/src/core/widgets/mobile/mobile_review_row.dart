@@ -125,7 +125,7 @@ class MobileReviewZecBadge extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppRadii.full),
       child: Image.asset(
-        'assets/swap/tokens/zec.png',
+        'assets/swap/tokens/zec.webp',
         width: 32,
         height: 32,
         fit: BoxFit.cover,

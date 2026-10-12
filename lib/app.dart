@@ -80,6 +80,7 @@ import 'src/features/onboarding/ledger/ledger_connect_screen.dart';
 import 'src/features/onboarding/ledger/ledger_setup_args.dart';
 import 'src/features/onboarding/lost_password_screen.dart';
 import 'src/features/onboarding/shared/onboarding_flow_args.dart';
+import 'src/features/onboarding/shared/account_persona_draft.dart';
 import 'src/features/onboarding/shared/set_password_screen.dart';
 import 'src/features/onboarding/storage_unavailable_screen.dart';
 import 'src/features/onboarding/mobile/mobile_unlock_screen.dart';
@@ -140,6 +141,7 @@ import 'src/features/voting/screens/voting_submission_confirmation_screen.dart';
 import 'src/providers/theme_mode_provider.dart';
 import 'src/providers/app_security_provider.dart';
 import 'src/providers/enhance_pir_provider.dart';
+import 'src/core/storage/enhance_pir_preference_store.dart';
 import 'src/providers/linux_update_provider.dart';
 import 'src/providers/network_privacy_provider.dart';
 import 'src/providers/rpc_endpoint_failover_provider.dart';
@@ -151,6 +153,7 @@ import 'src/providers/voting/voting_share_tracking_restorer_provider.dart';
 import 'src/providers/wallet_provider.dart';
 import 'src/providers/windows_update_provider.dart';
 import 'src/core/storage/secure_storage_diagnostics.dart';
+import 'src/core/storage/wallet_paths.dart';
 import 'src/core/widgets/linux_keyring_gate.dart';
 import 'src/core/storage/linux_keyring_coordinator.dart';
 import 'src/features/payment_links/services/gift_claim_setup_coordinator.dart';
@@ -250,21 +253,114 @@ Future<Widget> buildBootstrappedZcashWalletApp({
 /// private to public while the app cannot run. Native keeps its last value, or
 /// private when it never received one, and Rust stays public with no sync
 /// running until a retried bootstrap succeeds.
+///
+/// An unreadable setting applies as private for this launch, but is not
+/// confirmed, so it never raises the wallet's transparent policy. A saved
+/// `true` raises it before native work is applied. Startup lowers it only to
+/// finish an explicit opt-out the app did not live to finish: a saved `false`
+/// with a persisted opt-out marker. An unreadable marker or setting never
+/// lowers. A failed raise or lowering leaves the wallet private; the next
+/// sync retries a raise, the next launch a lowering.
+///
+/// There is one privacy toggle. A saved `false` on a wallet that still
+/// requires private recovery (an opt-out whose marker was lost) is shown and
+/// applied as an unfinished opt-out: Private queries reads on, private
+/// recovery keeps running, and turning the toggle off finishes the opt-out.
+///
+/// What it applied is recorded in [TransparentPolicyStartup.current] for the
+/// providers. Last, it prepares private transparent recovery's companion
+/// storage; see [prepareTransparentRecoveryCompanions].
 @visibleForTesting
 Future<void> applyEnhancePirPolicy(
   AppBootstrapState bootstrap, {
   void Function(bool enabled)? setRustEnabled,
+  void Function(bool confirmed)? setPreferenceConfirmed,
+  TransparentPolicyReconciler? reconcileTransparentPolicy,
+  TransparentPolicyReader? readTransparentPolicy,
+  TransparentOptOutStore optOutStore =
+      const SharedPreferencesTransparentOptOutStore(),
   Future<void> Function(bool enabled)? setNativePrivateRecovery,
+  Future<void> Function()? prepareCompanions,
 }) async {
+  TransparentPolicyStartup.current = const TransparentPolicyStartup();
   if (bootstrap.hasBlockingFailure) {
     log('bootstrap: blocked; leaving private recovery policy unchanged');
     return;
   }
-  final enabled =
-      bootstrap.enhancePirEnabled &&
-      isEnhancePirAvailableForNetwork(bootstrap.network);
-  (setRustEnabled ??
-      (enabled) => rust_sync.setEnhancePirEnabled(enabled: enabled))(enabled);
+  final saved = bootstrap.enhancePirEnabled;
+  var enabled =
+      (saved ?? true) && isEnhancePirAvailableForNetwork(bootstrap.network);
+  void applyRuntimeSetting() {
+    (setRustEnabled ??
+        (enabled) => rust_sync.setEnhancePirEnabled(enabled: enabled))(enabled);
+    (setPreferenceConfirmed ??
+        (confirmed) => rust_sync.setEnhancePirPreferenceConfirmed(
+          confirmed: confirmed,
+        ))(saved != null);
+  }
+
+  final reconcile =
+      reconcileTransparentPolicy ??
+      walletTransparentPolicyReconciler(bootstrap.network);
+  bool? optOutPending;
+  try {
+    optOutPending = await optOutStore.readPending();
+  } catch (error) {
+    // Unknown: never lower on uncertainty. The wallet stays as it is.
+    log('bootstrap: could not read the private queries opt-out: $error');
+  }
+  rust_sync.ApiAppliedTransparentPolicy? applied;
+  var optOutUnfinished = false;
+  if (saved == false && optOutPending == true) {
+    // Finish the opt-out before the runtime switches to the public setting.
+    // Should it fail, the durable private policy keeps governing every lookup.
+    try {
+      applied = await reconcile(false);
+      try {
+        await optOutStore.writePending(false);
+      } catch (error) {
+        // Retried next launch, where lowering a public wallet changes nothing.
+        log('bootstrap: could not clear the private queries opt-out: $error');
+      }
+    } catch (error) {
+      optOutUnfinished = true;
+      enabled = isEnhancePirAvailableForNetwork(bootstrap.network);
+      log('bootstrap: could not finish the private queries opt-out: $error');
+    }
+    applyRuntimeSetting();
+  } else if (enabled && saved == true) {
+    applyRuntimeSetting();
+    try {
+      applied = await reconcile(true);
+    } catch (error) {
+      log('bootstrap: could not apply private transparent policy: $error');
+    }
+  } else {
+    if (saved == false && isEnhancePirAvailableForNetwork(bootstrap.network)) {
+      try {
+        final current =
+            await (readTransparentPolicy ??
+                walletTransparentPolicyReader(bootstrap.network))();
+        if (current?.mode ==
+            rust_sync.ApiTransparentLedgerMode.privateRequired) {
+          // Still private: the opt-out never finished. Keep the runtime
+          // private and show the toggle on, so the user retries the opt-out.
+          applied = current;
+          optOutUnfinished = true;
+          enabled = true;
+        }
+      } catch (error) {
+        // Unknown: the library still resolves every read under the durable
+        // policy, so nothing public is revealed.
+        log('bootstrap: could not read the transparent policy: $error');
+      }
+    }
+    applyRuntimeSetting();
+  }
+  TransparentPolicyStartup.current = TransparentPolicyStartup(
+    appliedPolicy: applied,
+    optOutPending: optOutUnfinished,
+  );
   try {
     await (setNativePrivateRecovery ??
         IronwoodMigrationBackgroundLifecycle.instance.setPrivateRecovery)(
@@ -275,6 +371,40 @@ Future<void> applyEnhancePirPolicy(
     log(
       'bootstrap: could not apply private recovery to background work: $error',
     );
+  }
+  await (prepareCompanions ?? prepareTransparentRecoveryCompanions)();
+}
+
+/// Deletes companion directories that belong to no current wallet and keeps
+/// the current wallet's out of device backups before Rust writes into it.
+///
+/// Best effort: a failure is logged and startup continues. A leftover
+/// directory is swept on a later launch, and the backup mark is set again at
+/// every sync start.
+@visibleForTesting
+Future<void> prepareTransparentRecoveryCompanions({
+  Future<String> Function() resolveDbPath = getWalletDbPath,
+  Future<void> Function(String? currentDbPath) sweep =
+      deleteOrphanCompanionDirectories,
+  Future<void> Function(String dbPath) excludeFromBackup =
+      excludeTransparentRecoveryCompanionsFromBackup,
+}) async {
+  final String dbPath;
+  try {
+    dbPath = await resolveDbPath();
+  } catch (error) {
+    log('bootstrap: could not resolve the wallet for its companions: $error');
+    return;
+  }
+  try {
+    await sweep(dbPath);
+  } catch (error) {
+    log('bootstrap: could not delete orphan recovery companions: $error');
+  }
+  try {
+    await excludeFromBackup(dbPath);
+  } catch (error) {
+    log('bootstrap: could not keep recovery companions out of backups: $error');
   }
 }
 
@@ -561,7 +691,9 @@ String? appRedirect({
   // actionable on this screen; locking still takes precedence.
   if (hasWallet &&
       ref.read(giftClaimFlowProvider)?.walletSetupInProgress == true &&
-      state.matchedLocation == '/gift/customise') {
+      (state.matchedLocation == '/gift/customise' ||
+          state.matchedLocation == '/gift/set-password' ||
+          state.matchedLocation == '/gift/passcode')) {
     return requiresUnlock ? '/unlock' : null;
   }
   if (_isRouteOrChild(state.matchedLocation, '/gift')) {
@@ -712,7 +844,7 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
   GoRoute(
     path: '/gift/set-password',
     redirect: (_, _) =>
-        ref.read(giftClaimFlowProvider)?.inspection == null ? '/gift' : null,
+        ref.read(giftClaimFlowProvider)?.setupPersona == null ? '/gift' : null,
     builder: (_, _) => const DesktopGiftPasswordScreen(),
   ),
   GoRoute(
@@ -846,19 +978,7 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
         child: ImportWalletBirthdayScreen.ledger(
           onBirthdaySelected: (birthdayHeight) async {
             if (!context.mounted) return;
-            if (!ref.read(appSecurityProvider).isPasswordConfigured) {
-              context.go(
-                preserveDesktopImportEntry(
-                  state.uri,
-                  '/onboarding/ledger/set-password',
-                ),
-                extra: LedgerSetPasswordArgs(
-                  account: args.account,
-                  birthdayHeight: birthdayHeight,
-                ),
-              );
-              return;
-            }
+
             context.go(
               preserveDesktopImportEntry(
                 state.uri,
@@ -881,42 +1001,20 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
       if (!ref.read(ledgerStaticCapabilityProvider).supported) {
         return '/add-account';
       }
-      return state.extra is LedgerSetPasswordArgs ? null : '/onboarding/ledger';
+      final args = state.extra;
+      return args is SetPasswordScreenArgs &&
+              args.flow == SetPasswordFlow.importLedger &&
+              args.persona != null
+          ? null
+          : '/onboarding/ledger';
     },
-    pageBuilder: (context, state) {
-      final args = state.extra as LedgerSetPasswordArgs;
-      return CustomTransitionPage<void>(
-        key: state.pageKey,
-        transitionDuration: kOnboardingForwardDuration,
-        reverseTransitionDuration: kOnboardingReverseDuration,
-        child: SetPasswordScreen.ledger(
-          ledgerBackTarget: OnboardingBackTarget.route(
-            label: 'Wallet Birthday Height',
-            routePath: preserveDesktopImportEntry(
-              state.uri,
-              '/onboarding/ledger/birthday',
-            ),
-            routeExtra: LedgerBirthdayArgs(account: args.account),
-          ),
-          ledgerOnContinue: (password, inputSource) async {
-            if (!context.mounted) return;
-            context.go(
-              preserveDesktopImportEntry(
-                state.uri,
-                '/onboarding/ledger/customise-account',
-              ),
-              extra: LedgerCustomiseAccountArgs(
-                account: args.account,
-                birthdayHeight: args.birthdayHeight,
-                pendingPassword: password,
-                passwordInputSource: inputSource,
-              ),
-            );
-          },
-        ),
-        transitionsBuilder: _onboardingFadeTransition,
-      );
-    },
+    pageBuilder: (context, state) => CustomTransitionPage<void>(
+      key: state.pageKey,
+      transitionDuration: kOnboardingForwardDuration,
+      reverseTransitionDuration: kOnboardingReverseDuration,
+      child: SetPasswordScreen(args: state.extra as SetPasswordScreenArgs),
+      transitionsBuilder: _onboardingFadeTransition,
+    ),
   ),
   GoRoute(
     path: '/onboarding/ledger/customise-account',
@@ -930,82 +1028,55 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
     },
     pageBuilder: (context, state) {
       final args = state.extra as LedgerCustomiseAccountArgs;
+      final needsPassword = !ref.read(appSecurityProvider).isPasswordConfigured;
       return CustomTransitionPage<void>(
         key: state.pageKey,
         transitionDuration: kOnboardingForwardDuration,
         reverseTransitionDuration: kOnboardingReverseDuration,
         child: CustomiseAccountScreen.ledger(
+          initialPersona: args.persona,
+          continueToSecurity: needsPassword,
           ledgerBackTarget: OnboardingBackTarget.route(
-            label: args.pendingPassword == null
-                ? 'Wallet Birthday Height'
-                : 'Set Password',
+            label: 'Wallet Birthday Height',
             routePath: preserveDesktopImportEntry(
               state.uri,
-              args.pendingPassword == null
-                  ? '/onboarding/ledger/birthday'
-                  : '/onboarding/ledger/set-password',
+              '/onboarding/ledger/birthday',
             ),
-            routeExtra: args.pendingPassword == null
-                ? LedgerBirthdayArgs(account: args.account)
-                : LedgerSetPasswordArgs(
-                    account: args.account,
-                    birthdayHeight: args.birthdayHeight,
-                  ),
+            routeExtra: LedgerBirthdayArgs(account: args.account),
           ),
           onFinish: (name, profilePictureId) async {
-            await ref.read(linuxKeyringCoordinatorProvider).runMutation(
-              () async {
-                Future<void> importAccount() =>
-                    ref.read(ledgerAccountImporterProvider)(
-                      name: name,
+            if (needsPassword) {
+              context.go(
+                preserveDesktopImportEntry(
+                  state.uri,
+                  '/onboarding/ledger/set-password',
+                ),
+                extra:
+                    SetPasswordScreenArgs.importLedger(
                       account: args.account,
                       birthdayHeight: args.birthdayHeight,
-                      profilePictureId: profilePictureId,
-                    );
-
-                final pendingPassword = args.pendingPassword;
-                final inputSourceService = ref.read(
-                  appPasswordInputSourceProvider,
+                    ).withPersona(
+                      AccountPersona(
+                        name: name,
+                        profilePictureId: profilePictureId,
+                      ),
+                    ),
+              );
+              return;
+            }
+            await ref
+                .read(linuxKeyringCoordinatorProvider)
+                .runMutation(
+                  () => ref.read(ledgerAccountImporterProvider)(
+                    name: name,
+                    account: args.account,
+                    birthdayHeight: args.birthdayHeight,
+                    profilePictureId: profilePictureId,
+                  ),
                 );
-                if (pendingPassword == null) {
-                  await importAccount();
-                  return;
-                }
-
-                final securityNotifier = ref.read(appSecurityProvider.notifier);
-                final routerRefresh = ref.read(routerRefreshProvider);
-                var passwordPrepared = false;
-                var passwordCommitted = false;
-                try {
-                  await routerRefresh.pauseWhile(() async {
-                    await securityNotifier.preparePasswordSetup(
-                      pendingPassword,
-                    );
-                    passwordPrepared = true;
-                    await importAccount();
-                    await securityNotifier.completePasswordSetup();
-                    passwordCommitted = true;
-                    unawaited(
-                      inputSourceService.remember(args.passwordInputSource),
-                    );
-                  });
-                } catch (error) {
-                  if (passwordPrepared && !passwordCommitted) {
-                    await securityNotifier.finishPasswordSetupAfterFailure(
-                      accountMayExist:
-                          error is WalletAccountSetupInterruptedException ||
-                          (ref.read(accountProvider).value?.hasAccounts ??
-                              false),
-                    );
-                  }
-                  rethrow;
-                }
-              },
-            );
             if (!context.mounted) return;
             await completeGiftClaimImportSetupForRoute(ref, context);
-            if (!context.mounted) return;
-            context.go('/home');
+            if (context.mounted) context.go('/home');
           },
         ),
         transitionsBuilder: _onboardingFadeTransition,
@@ -1076,7 +1147,8 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
         redirect: (_, state) {
           final args = state.extra;
           if (args is SetPasswordScreenArgs &&
-              args.flow == SetPasswordFlow.create) {
+              args.flow == SetPasswordFlow.create &&
+              args.persona != null) {
             return null;
           }
           return OnboardingStep.secretPassphrase.routePath;
@@ -1184,7 +1256,8 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
         redirect: (_, state) {
           final args = state.extra;
           if (args is SetPasswordScreenArgs &&
-              args.flow == SetPasswordFlow.importKeystone) {
+              args.flow == SetPasswordFlow.importKeystone &&
+              args.persona != null) {
             return null;
           }
           return KeystoneOnboardingStep.walletBirthdayHeight.routePath;
@@ -1269,7 +1342,8 @@ List<RouteBase> appDesktopOnboardingRoutes(Ref ref) => [
         redirect: (_, state) {
           final args = state.extra;
           if (args is SetPasswordScreenArgs &&
-              args.flow == SetPasswordFlow.importWallet) {
+              args.flow == SetPasswordFlow.importWallet &&
+              args.persona != null) {
             return null;
           }
           return '/import';

@@ -17,6 +17,7 @@ import 'package:zcash_wallet/src/core/widgets/app_profile_picture.dart';
 import 'package:zcash_wallet/src/features/activity/activity_row_mapper.dart';
 import 'package:zcash_wallet/src/features/activity/gift_card_activity_index.dart';
 import 'package:zcash_wallet/src/features/activity/screens/mobile/mobile_transaction_status_screen.dart';
+import 'package:zcash_wallet/src/features/activity/transaction_completeness.dart';
 import 'package:zcash_wallet/src/features/address_book/models/address_book_contact.dart';
 import 'package:zcash_wallet/src/features/address_book/providers/address_book_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/models/vizor_payment_link.dart';
@@ -24,11 +25,13 @@ import 'package:zcash_wallet/src/features/payment_links/services/payment_link_tr
 import 'package:zcash_wallet/src/features/payment_links/widgets/payment_link_gift_card.dart';
 import 'package:zcash_wallet/src/features/send/widgets/send_recipient_resolver.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
+import 'package:zcash_wallet/src/providers/enhance_pir_provider.dart';
 import 'package:zcash_wallet/src/providers/privacy_mode_provider.dart';
 import 'package:zcash_wallet/src/providers/sync_provider.dart';
 import 'package:zcash_wallet/src/rust/api/sync.dart' as rust_sync;
 
 import '../../fakes/fake_sync_notifier.dart';
+import '../../fakes/fake_enhance_pir_notifier.dart';
 
 String _reverseHexBytes(String hex) {
   final bytes = [
@@ -85,16 +88,25 @@ rust_sync.TransactionInfo _tx({
   String? activityPool,
   BigInt? blockTime,
   BigInt? createdTime,
+  rust_sync.TransactionFeeState feeState = rust_sync.TransactionFeeState.known,
+  bool detailsComplete = true,
+  bool provisional = false,
+  bool amountIncludesFee = false,
   BigInt? displayAmount,
+  int accountBalanceDelta = 0,
 }) {
   return rust_sync.TransactionInfo(
     txidHex: txid,
     minedHeight: minedHeight ?? BigInt.from(2500000),
     expiredUnmined: expired,
-    accountBalanceDelta: 0,
+    accountBalanceDelta: accountBalanceDelta,
     fee: fee ?? BigInt.from(15000),
+    feeState: feeState,
+    detailsComplete: detailsComplete,
+    provisional: provisional,
+    amountIncludesFee: amountIncludesFee,
     blockTime: blockTime ?? BigInt.from(1750000000),
-    isTransparent: false,
+    isTransparent: displayPool == 'transparent',
     txKind: kind,
     displayAmount: displayAmount ?? BigInt.from(12312000000),
     displayPool: displayPool,
@@ -111,15 +123,22 @@ rust_sync.TransactionDetail _detail({
   String? sourcePool,
   String? memo,
   List<rust_sync.TransactionDetailOutput> outputs = const [],
+  bool hasRecipient = true,
+  BigInt? networkFee,
 }) {
   return rust_sync.TransactionDetail(
     txidHex: txid,
+    networkFee: networkFee,
+    detailsComplete: true,
+    provisional: false,
     txKind: kind,
-    primaryAddress: primaryAddress ?? _address,
+    primaryAddress: hasRecipient ? primaryAddress ?? _address : null,
     sourceAddress: sourceAddress,
     sourcePool: sourcePool,
     memo: memo,
     outputs: outputs,
+    transparentRecipients: const [],
+    transparentOmissions: const [],
   );
 }
 
@@ -156,6 +175,7 @@ Widget _app(
   Map<String, AccountInfo> ownAccounts = const {},
   bool pricingEnabled = true,
   bool privacyEnabled = false,
+  bool privateQueriesEnabled = false,
   String? routeTxid,
   List<rust_sync.TransactionInfo>? history,
 }) {
@@ -164,6 +184,9 @@ Widget _app(
     overrides: [
       swapFeatureEnabledProvider.overrideWithValue(pricingEnabled),
       privacyModeProvider.overrideWith(() => _FixedPrivacy(privacyEnabled)),
+      enhancePirProvider.overrideWith(
+        () => FakeEnhancePirNotifier(privateQueriesEnabled),
+      ),
       appBootstrapProvider.overrideWithValue(_bootstrap()),
       syncProvider.overrideWith(
         () => FakeSyncNotifier(
@@ -200,6 +223,92 @@ Widget _app(
 }
 
 void main() {
+  testWidgets(
+    'recovered mobile receipt shows known network fee without attribution',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(393, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final tx = _tx(
+        fee: BigInt.zero,
+        feeState: rust_sync.TransactionFeeState.unknown,
+      );
+      await tester.pumpWidget(
+        _app(
+          tx,
+          privateQueriesEnabled: true,
+          detail: _detail(networkFee: BigInt.from(15000)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Network fee'), findsOneWidget);
+      expect(find.text('0.00015 ZEC'), findsOneWidget);
+      expect(find.text(kUnknownFeeText), findsNothing);
+      expect(tx.feeState, rust_sync.TransactionFeeState.unknown);
+      expect(tx.fee, BigInt.zero);
+      await tester.tap(find.text('0.00015 ZEC'));
+      await tester.pumpAndSettle();
+      expect(find.text(kUnattributedNetworkFeeHelpText), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'older mobile receipt refreshes on sync completion without recent changes',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(393, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final initial = _tx(
+        fee: BigInt.zero,
+        feeState: rust_sync.TransactionFeeState.unknown,
+        detailsComplete: false,
+        provisional: true,
+      );
+      final history = [initial];
+      await tester.pumpWidget(
+        _app(initial, history: history, privateQueriesEnabled: true),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+        findsOneWidget,
+      );
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(MobileTransactionStatusScreen)),
+      );
+      final notifier =
+          container.read(syncProvider.notifier) as FakeSyncNotifier;
+      final recent = List.generate(
+        10,
+        (i) => _tx(txid: '${i + 1}'.padLeft(64, '0')),
+      );
+      notifier.setSyncState(
+        SyncState(
+          accountUuid: 'account-1',
+          hasAccountScopedData: true,
+          isSyncing: true,
+          recentTransactions: recent,
+        ),
+      );
+      await tester.pumpAndSettle();
+      history[0] = _tx(kind: 'shielded');
+      notifier.setSyncState(
+        SyncState(
+          accountUuid: 'account-1',
+          hasAccountScopedData: true,
+          isSyncing: false,
+          isSyncComplete: true,
+          recentTransactions: recent,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+        findsNothing,
+      );
+      expect(find.text(kUnknownFeeText), findsNothing);
+      expect(find.text('From transparent balance'), findsOneWidget);
+    },
+  );
+
   testWidgets('pending claim transaction ID opens the broadcast hash', (
     tester,
   ) async {
@@ -280,6 +389,57 @@ void main() {
       expect(find.text('Refunded'), findsNothing);
     },
   );
+
+  for (final feeState in rust_sync.TransactionFeeState.values) {
+    testWidgets('ordinary receive shows no fee: $feeState', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(393, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        _app(
+          _tx(kind: 'received', fee: BigInt.from(15000), feeState: feeState),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Tx fee'), findsNothing);
+      expect(find.text('0.00015 ZEC'), findsNothing);
+    });
+  }
+
+  testWidgets('ordinary receive shows no fee even when history is enriched', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(393, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final initial = _tx(kind: 'received', fee: BigInt.zero);
+    final history = [initial];
+    await tester.pumpWidget(_app(initial, history: history));
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MobileTransactionStatusScreen)),
+    );
+    final notifier = container.read(syncProvider.notifier) as FakeSyncNotifier;
+    notifier.setSyncState(
+      SyncState(
+        accountUuid: 'account-1',
+        hasAccountScopedData: true,
+        recentTransactions: [initial],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Tx fee'), findsNothing);
+    final enriched = _tx(kind: 'received', fee: BigInt.from(15000));
+    history[0] = enriched;
+    notifier.setSyncState(
+      SyncState(
+        accountUuid: 'account-1',
+        hasAccountScopedData: true,
+        recentTransactions: [enriched],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Tx fee'), findsNothing);
+    expect(find.text('0.00015 ZEC'), findsNothing);
+  });
 
   testWidgets('redeemed receipt shows no fee before or after the fee arrives', (
     tester,
@@ -619,6 +779,274 @@ void main() {
     expect(find.text('efcdab89...67452301'), findsOneWidget);
   });
 
+  testWidgets(
+    'a provisional debit shows an unknown fee and incomplete details',
+    (tester) async {
+      await tester.pumpWidget(
+        _app(
+          _tx(
+            fee: BigInt.zero,
+            displayPool: 'unknown',
+            feeState: rust_sync.TransactionFeeState.unknown,
+            detailsComplete: false,
+            provisional: true,
+          ),
+          privateQueriesEnabled: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Tx fee'), findsOneWidget);
+      expect(find.text(kUnknownFeeText), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+        findsOneWidget,
+      );
+      expect(find.text('Incomplete'), findsOneWidget);
+    },
+  );
+
+  testWidgets('a fee-only entry remains one neutral net change line', (
+    tester,
+  ) async {
+    // Reconstructed zero external payment; recipient details can be missing.
+    final tx = _tx(
+      fee: BigInt.from(65000),
+      displayAmount: BigInt.from(65000),
+      displayPool: 'transparent',
+      amountIncludesFee: true,
+      detailsComplete: false,
+      accountBalanceDelta: -65000,
+    );
+    await tester.pumpWidget(
+      _app(
+        tx,
+        detail: _detail(hasRecipient: false),
+        privateQueriesEnabled: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Transaction'), findsOneWidget);
+    expect(find.text('Sent successfully'), findsNothing);
+    expect(find.text(kNetChangeText), findsOneWidget);
+    expect(find.text('0.00065 ZEC'), findsOneWidget);
+    expect(find.text('Amount'), findsNothing);
+    expect(find.text('Tx fee'), findsNothing);
+    expect(find.text('To'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'a provisional fee-sized movement keeps its net change and fee explanation',
+    (tester) async {
+      // A mixed-pool balance decrease does not establish a fee-only activity.
+      final tx = _tx(
+        fee: BigInt.from(20000),
+        displayAmount: BigInt.from(20000),
+        displayPool: 'unknown',
+        amountIncludesFee: true,
+        detailsComplete: false,
+        provisional: true,
+        accountBalanceDelta: -20000,
+      );
+      await tester.pumpWidget(
+        _app(
+          tx,
+          detail: _detail(hasRecipient: false),
+          privateQueriesEnabled: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Transaction'), findsOneWidget);
+      expect(find.text('Sent successfully'), findsNothing);
+      expect(find.text('Network fee'), findsNothing);
+      expect(find.text(kNetChangeText), findsOneWidget);
+      expect(find.text('0.0002 ZEC'), findsNWidgets(2));
+      expect(find.text('Amount'), findsNothing);
+      expect(find.text('Tx fee'), findsOneWidget);
+      expect(find.text('To'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('an amount that includes the fee is labelled a net change', (
+    tester,
+  ) async {
+    final tx = _tx(
+      fee: BigInt.from(10000),
+      displayAmount: BigInt.from(70000000),
+      displayPool: 'unknown',
+      amountIncludesFee: true,
+      detailsComplete: false,
+      provisional: true,
+    );
+    await tester.pumpWidget(_app(tx, detail: _detail()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Transaction'), findsOneWidget);
+    expect(find.text('Sent successfully'), findsNothing);
+    expect(find.text(kNetChangeText), findsOneWidget);
+    expect(find.text('Amount'), findsNothing);
+    // Nothing is subtracted, and the fee keeps its own line.
+    expect(find.text('0.70 ZEC'), findsOneWidget);
+    expect(find.text('Tx fee'), findsOneWidget);
+    expect(find.text('0.0001 ZEC'), findsOneWidget);
+    expect(find.text('Network fee'), findsNothing);
+  });
+
+  for (final kind in ['sent', 'received', 'shielded', 'migration']) {
+    for (final privateQueriesEnabled in [false, true]) {
+      testWidgets(
+        'feedback for $kind is private-only: $privateQueriesEnabled',
+        (tester) async {
+          await tester.pumpWidget(
+            _app(
+              _tx(
+                kind: kind,
+                fee: BigInt.zero,
+                feeState: rust_sync.TransactionFeeState.unknown,
+                detailsComplete: false,
+                provisional: true,
+              ),
+              privateQueriesEnabled: privateQueriesEnabled,
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          expect(
+            find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+            privateQueriesEnabled ? findsOneWidget : findsNothing,
+          );
+          expect(
+            find.text(kUnknownFeeText),
+            privateQueriesEnabled && kind != 'received'
+                ? findsOneWidget
+                : findsNothing,
+          );
+        },
+      );
+    }
+  }
+
+  testWidgets('an open receipt updates feedback when Private queries changes', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        _tx(
+          fee: BigInt.zero,
+          feeState: rust_sync.TransactionFeeState.unknown,
+          provisional: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MobileTransactionStatusScreen)),
+    );
+    for (final enabled in [true, false]) {
+      await container.read(enhancePirProvider.notifier).set(enabled);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+        enabled ? findsOneWidget : findsNothing,
+      );
+      expect(
+        find.text(kUnknownFeeText),
+        enabled ? findsOneWidget : findsNothing,
+      );
+      expect(find.text('Tx fee'), enabled ? findsOneWidget : findsNothing);
+    }
+  });
+
+  testWidgets('a provisional entry follows its transaction to a new role', (
+    tester,
+  ) async {
+    final provisional = _tx(
+      displayPool: 'unknown',
+      feeState: rust_sync.TransactionFeeState.unknown,
+      detailsComplete: false,
+      provisional: true,
+    );
+    await tester.pumpWidget(
+      _app(
+        provisional,
+        history: [_tx(kind: 'shielded', displayPool: 'shielded')],
+        privateQueriesEnabled: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('From transparent balance'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('a provisional entry never picks one leg of several', (
+    tester,
+  ) async {
+    final provisional = _tx(
+      displayPool: 'unknown',
+      feeState: rust_sync.TransactionFeeState.unknown,
+      detailsComplete: false,
+      provisional: true,
+    );
+    await tester.pumpWidget(
+      _app(
+        provisional,
+        history: [
+          _tx(kind: 'shielded', displayPool: 'shielded'),
+          _tx(kind: 'received', displayPool: 'shielded'),
+        ],
+        privateQueriesEnabled: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('From transparent balance'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('known payment details still mark unsettled effects', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(_tx(provisional: true), privateQueriesEnabled: true),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a complete receipt has no incomplete-details row', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_app(_tx(), privateQueriesEnabled: true));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('mobile_tx_status_details_incomplete')),
+      findsNothing,
+    );
+    expect(find.text(kUnknownFeeText), findsNothing);
+  });
+
   testWidgets('sent TEX tx keeps a TEX recipient label', (tester) async {
     await tester.pumpWidget(
       _app(
@@ -672,9 +1100,7 @@ void main() {
     expect(find.text('Transparent'), findsNothing);
   });
 
-  testWidgets('gift card receipt keeps pool details hidden', (
-    tester,
-  ) async {
+  testWidgets('gift card receipt keeps pool details hidden', (tester) async {
     for (final pool in ['ironwood', 'shielded', 'orchard', 'sapling']) {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpWidget(
@@ -961,6 +1387,10 @@ void main() {
             txidHex: tx.txidHex,
             txKind: 'unknown',
             outputs: const [],
+            detailsComplete: true,
+            provisional: false,
+            transparentRecipients: const [],
+            transparentOmissions: const [],
           ),
         ),
       );
