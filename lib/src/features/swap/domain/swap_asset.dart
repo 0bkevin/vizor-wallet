@@ -592,18 +592,18 @@ String _tokenIconAssetPath(String iconKey) {
     'stnear' => 'near',
     _ => iconKey,
   };
-  return 'assets/swap/tokens/$assetKey.png';
+  return 'assets/swap/tokens/$assetKey.webp';
 }
 
 String _chainIconAssetPath(String iconKey) {
   return switch (iconKey) {
-    'abs' => 'assets/swap/chains/eth.png',
-    'bsc' => 'assets/swap/tokens/bnb.png',
-    'cardano' => 'assets/swap/tokens/ada.png',
-    'fogo' => 'assets/swap/tokens/fogo.png',
-    'qtc' => 'assets/swap/tokens/qtc.png',
-    'xlayer' => 'assets/swap/tokens/okb.png',
-    _ => 'assets/swap/chains/$iconKey.png',
+    'abs' => 'assets/swap/chains/eth.webp',
+    'bsc' => 'assets/swap/tokens/bnb.webp',
+    'cardano' => 'assets/swap/tokens/ada.webp',
+    'fogo' => 'assets/swap/tokens/fogo.webp',
+    'qtc' => 'assets/swap/tokens/qtc.webp',
+    'xlayer' => 'assets/swap/tokens/okb.webp',
+    _ => 'assets/swap/chains/$iconKey.webp',
   };
 }
 

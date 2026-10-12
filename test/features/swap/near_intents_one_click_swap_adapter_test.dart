@@ -1178,23 +1178,23 @@ void main() {
     expect(baseUsdc.railLabel, 'Base USDC');
     expect(baseUsdc.tokenIconKey, 'usdc');
     expect(baseUsdc.chainIconKey, 'base');
-    expect(baseUsdc.tokenIconAsset, 'assets/swap/tokens/usdc.png');
-    expect(baseUsdc.chainIconAsset, 'assets/swap/chains/base.png');
+    expect(baseUsdc.tokenIconAsset, 'assets/swap/tokens/usdc.webp');
+    expect(baseUsdc.chainIconAsset, 'assets/swap/chains/base.webp');
 
     final bscUsdc = supported.singleWhere(
       (asset) => asset.symbol == 'USDC' && asset.chainTicker == 'bsc',
     );
     expect(bscUsdc.chainLabel, 'Binance Smart Chain');
-    expect(bscUsdc.tokenIconAsset, 'assets/swap/tokens/usdc.png');
+    expect(bscUsdc.tokenIconAsset, 'assets/swap/tokens/usdc.webp');
     expect(bscUsdc.chainIconKey, 'bsc');
-    expect(bscUsdc.chainIconAsset, 'assets/swap/tokens/bnb.png');
+    expect(bscUsdc.chainIconAsset, 'assets/swap/tokens/bnb.webp');
 
     final bnb = supported.singleWhere(
       (asset) => asset.symbol == 'BNB' && asset.chainTicker == 'bsc',
     );
     expect(bnb.displayName, 'BNB');
-    expect(bnb.tokenIconAsset, 'assets/swap/tokens/bnb.png');
-    expect(bnb.chainIconAsset, 'assets/swap/tokens/bnb.png');
+    expect(bnb.tokenIconAsset, 'assets/swap/tokens/bnb.webp');
+    expect(bnb.chainIconAsset, 'assets/swap/tokens/bnb.webp');
 
     await provider.quote(
       SwapQuoteRequest(
