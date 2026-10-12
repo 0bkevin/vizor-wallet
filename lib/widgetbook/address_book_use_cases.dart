@@ -212,10 +212,10 @@ class _AddressBookContact {
 }
 
 enum _AddressBookNetwork {
-  zcash('Zcash', 'assets/swap/chains/zec.png'),
-  solana('Solana', 'assets/swap/chains/sol.png'),
-  ethereum('Ethereum', 'assets/swap/chains/eth.png'),
-  base('Base', 'assets/swap/chains/base.png');
+  zcash('Zcash', 'assets/swap/chains/zec.webp'),
+  solana('Solana', 'assets/swap/chains/sol.webp'),
+  ethereum('Ethereum', 'assets/swap/chains/eth.webp'),
+  base('Base', 'assets/swap/chains/base.webp');
 
   const _AddressBookNetwork(this.label, this.assetPath);
 
