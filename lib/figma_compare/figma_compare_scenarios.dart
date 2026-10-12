@@ -90,6 +90,28 @@ class FigmaCompareScenario {
 /// because they are already used to review the same UI states.
 const figmaCompareScenarios = <FigmaCompareScenario>[
   FigmaCompareScenario(
+    id: 'ironwood-label-audit-desktop-activity',
+    description:
+        'Ordinary Ironwood sends and receives in desktop Home activity',
+    builder: buildDesktopIronwoodLabelAuditActivityUseCase,
+    platform: TargetPlatform.macOS,
+  ),
+  FigmaCompareScenario(
+    id: 'ironwood-label-audit-mobile-activity',
+    description: 'Ordinary Ironwood sends and receives in mobile Activity',
+    builder: buildMobileIronwoodLabelAuditActivityUseCase,
+    desktop: false,
+    mobile: true,
+  ),
+  FigmaCompareScenario(
+    id: 'ironwood-label-audit-mobile-sent',
+    description:
+        'Mobile sent receipt with raw Ironwood transaction pool values',
+    builder: buildMobileIronwoodLabelAuditSentUseCase,
+    desktop: false,
+    mobile: true,
+  ),
+  FigmaCompareScenario(
     id: 'swap-asset-icons',
     description: 'Bundled swap token logos and chain badges',
     builder: buildSwapAssetIconsCapture,
