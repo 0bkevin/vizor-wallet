@@ -11942,8 +11942,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ApiSyncProgressEvent dco_decode_api_sync_progress_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 11)
-      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
+    if (arr.length != 13)
+      throw Exception('unexpected arr length: expect 13 but see ${arr.length}');
     return ApiSyncProgressEvent(
       kind: dco_decode_api_sync_event_kind(arr[0]),
       scannedHeight: dco_decode_u_64(arr[1]),
@@ -11951,11 +11951,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       percentage: dco_decode_f_64(arr[3]),
       displayTargetPercentage: dco_decode_f_64(arr[4]),
       displayTargetBlocks: dco_decode_u_64(arr[5]),
-      isSyncing: dco_decode_bool(arr[6]),
-      hasNewTx: dco_decode_bool(arr[7]),
-      phaseCompletedUnits: dco_decode_u_64(arr[8]),
-      phaseTotalUnits: dco_decode_u_64(arr[9]),
-      phase: dco_decode_String(arr[10]),
+      remainingScanBlocks: dco_decode_opt_box_autoadd_u_64(arr[6]),
+      pendingScanStartHeight: dco_decode_opt_box_autoadd_u_64(arr[7]),
+      isSyncing: dco_decode_bool(arr[8]),
+      hasNewTx: dco_decode_bool(arr[9]),
+      phaseCompletedUnits: dco_decode_u_64(arr[10]),
+      phaseTotalUnits: dco_decode_u_64(arr[11]),
+      phase: dco_decode_String(arr[12]),
     );
   }
 
@@ -16055,6 +16057,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_percentage = sse_decode_f_64(deserializer);
     var var_displayTargetPercentage = sse_decode_f_64(deserializer);
     var var_displayTargetBlocks = sse_decode_u_64(deserializer);
+    var var_remainingScanBlocks = sse_decode_opt_box_autoadd_u_64(deserializer);
+    var var_pendingScanStartHeight = sse_decode_opt_box_autoadd_u_64(
+      deserializer,
+    );
     var var_isSyncing = sse_decode_bool(deserializer);
     var var_hasNewTx = sse_decode_bool(deserializer);
     var var_phaseCompletedUnits = sse_decode_u_64(deserializer);
@@ -16067,6 +16073,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       percentage: var_percentage,
       displayTargetPercentage: var_displayTargetPercentage,
       displayTargetBlocks: var_displayTargetBlocks,
+      remainingScanBlocks: var_remainingScanBlocks,
+      pendingScanStartHeight: var_pendingScanStartHeight,
       isSyncing: var_isSyncing,
       hasNewTx: var_hasNewTx,
       phaseCompletedUnits: var_phaseCompletedUnits,
@@ -21262,6 +21270,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_f_64(self.percentage, serializer);
     sse_encode_f_64(self.displayTargetPercentage, serializer);
     sse_encode_u_64(self.displayTargetBlocks, serializer);
+    sse_encode_opt_box_autoadd_u_64(self.remainingScanBlocks, serializer);
+    sse_encode_opt_box_autoadd_u_64(self.pendingScanStartHeight, serializer);
     sse_encode_bool(self.isSyncing, serializer);
     sse_encode_bool(self.hasNewTx, serializer);
     sse_encode_u_64(self.phaseCompletedUnits, serializer);

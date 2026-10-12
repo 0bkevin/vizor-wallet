@@ -1525,6 +1525,12 @@ class ApiSyncProgressEvent {
   /// advances at most `display_target_blocks` virtual blocks to this target.
   final double displayTargetPercentage;
   final BigInt displayTargetBlocks;
+
+  /// Total pending scan blocks. None before queue discovery, Some(0) if empty.
+  final BigInt? remainingScanBlocks;
+
+  /// Inclusive start of the earliest pending scan range, regardless of priority.
+  final BigInt? pendingScanStartHeight;
   final bool isSyncing;
   final bool hasNewTx;
 
@@ -1543,6 +1549,8 @@ class ApiSyncProgressEvent {
     required this.percentage,
     required this.displayTargetPercentage,
     required this.displayTargetBlocks,
+    this.remainingScanBlocks,
+    this.pendingScanStartHeight,
     required this.isSyncing,
     required this.hasNewTx,
     required this.phaseCompletedUnits,
@@ -1558,6 +1566,8 @@ class ApiSyncProgressEvent {
       percentage.hashCode ^
       displayTargetPercentage.hashCode ^
       displayTargetBlocks.hashCode ^
+      remainingScanBlocks.hashCode ^
+      pendingScanStartHeight.hashCode ^
       isSyncing.hashCode ^
       hasNewTx.hashCode ^
       phaseCompletedUnits.hashCode ^
@@ -1575,6 +1585,8 @@ class ApiSyncProgressEvent {
           percentage == other.percentage &&
           displayTargetPercentage == other.displayTargetPercentage &&
           displayTargetBlocks == other.displayTargetBlocks &&
+          remainingScanBlocks == other.remainingScanBlocks &&
+          pendingScanStartHeight == other.pendingScanStartHeight &&
           isSyncing == other.isSyncing &&
           hasNewTx == other.hasNewTx &&
           phaseCompletedUnits == other.phaseCompletedUnits &&
