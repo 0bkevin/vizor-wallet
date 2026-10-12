@@ -466,6 +466,26 @@ class _PricingSwapProvider extends _FakeSwapProvider
   }
 }
 
+class _DeferredCatalogPricingSwapProvider extends _FakeSwapProvider
+    implements SwapPricingProvider {
+  _DeferredCatalogPricingSwapProvider({
+    required super.supportedAssets,
+    required this.usdPrices,
+  });
+
+  final Map<SwapAsset, double> usdPrices;
+  final _pricingCompleter = Completer<SwapPricingSnapshot>();
+
+  void completePricing() {
+    _pricingCompleter.complete(SwapPricingSnapshot(usdPrices: usdPrices));
+  }
+
+  @override
+  Future<SwapPricingSnapshot> loadPricingSnapshot({bool forceRefresh = false}) {
+    return _pricingCompleter.future;
+  }
+}
+
 class _TorBlockedPricingSwapProvider extends _FakeSwapProvider
     implements SwapPricingProvider {
   @override

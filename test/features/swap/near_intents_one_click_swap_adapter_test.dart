@@ -1234,6 +1234,46 @@ void main() {
     expect(transport.requests, hasLength(2));
   });
 
+  for (final price in <String?>['0', null]) {
+    test(
+      'full catalog retains unpriced deprecated tokens (price=$price)',
+      () async {
+        final tokens = [
+          ..._tokensWithPrices('100'),
+          {
+            'assetId': 'nep141:future.omft.near',
+            'decimals': 6,
+            'blockchain': 'eth',
+            'symbol': 'FUTURE_(DEPRECATED)',
+            'price': ?price,
+          },
+        ];
+        final transport = _FakeOneClickTransport([
+          _FakeResponse.get('/v0/tokens', tokens),
+          _FakeResponse.get('/v0/tokens', tokens),
+        ]);
+        final provider = NearIntentsOneClickSwapAdapter(transport: transport);
+
+        for (final forceRefresh in [false, true]) {
+          final pricing = await provider.loadPricingSnapshot(
+            forceRefresh: forceRefresh,
+          );
+          expect(pricing.supportedExternalAssets, isNotEmpty);
+          expect(
+            pricing.supportedExternalAssets.any((a) => a.isDeprecated),
+            isFalse,
+          );
+          final catalog = await provider.listSupportedExternalAssets();
+          final deprecated = catalog.singleWhere(
+            (asset) => asset.assetId == 'nep141:future.omft.near',
+          );
+          expect(deprecated.isDeprecated, isTrue);
+          expect(transport.requests, hasLength(forceRefresh ? 2 : 1));
+        }
+      },
+    );
+  }
+
   test(
     'quote supports non-USDC external assets on their preferred chain',
     () async {

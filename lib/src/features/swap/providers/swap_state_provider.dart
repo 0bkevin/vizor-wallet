@@ -613,18 +613,22 @@ class SwapNotifier extends Notifier<SwapState> {
           : await pricingProvider.loadPricingSnapshot(
               forceRefresh: forceRefreshPrices,
             );
-      final liveAssets = pricing?.supportedExternalAssets.isNotEmpty == true
+      // Pricing omits assets without positive prices, including deprecated ones.
+      final catalog = await provider.listSupportedExternalAssets();
+      final selectionCandidates =
+          pricing?.supportedExternalAssets.isNotEmpty == true
           ? pricing!.supportedExternalAssets
-          : await provider.listSupportedExternalAssets();
+          : catalog;
       if (generation != _pricingLoadGeneration) return;
       _hasResolvedSupportedAssets = true;
       _deprecatedAssetIdentityKeys = {
-        for (final asset in liveAssets)
+        for (final asset in catalog)
           if (asset.isDeprecated) asset.identityKey,
       };
       final supported = [
-        for (final asset in liveAssets)
-          if (asset != SwapAsset.zec && !asset.isDeprecated) asset,
+        for (final asset in selectionCandidates)
+          if (asset != SwapAsset.zec && !_isDeprecatedForSelection(asset))
+            asset,
       ];
       if (supported.isEmpty) {
         state = state.copyWith(
