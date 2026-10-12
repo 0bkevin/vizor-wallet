@@ -59,7 +59,9 @@ final syncDisplayWholePercentageProvider = Provider.autoDispose<int>((ref) {
   return (progress.clamp(0.0, _scanCeiling) * 100).round();
 });
 
-/// Stage/cycle changes only; never notified by the display interpolation timer.
+/// Stage/queue changes only; never notified by the display interpolation timer.
+/// The cycle is internal: a retry's discovered queue may reset Checking to a
+/// lower fraction, while ordinary events retain the smooth predicted floor.
 final syncDisplayCheckingCycleProvider = Provider.autoDispose<int>((ref) {
   return ref.watch(
     syncProvider.select((value) {

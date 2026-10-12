@@ -118,7 +118,7 @@ void main() {
   }
 
   testWidgets(
-    'Checking resets the 99 percent floor, retains retries, and resets only for new work',
+    'Checking resets for discovered retry work but does not oscillate on ordinary events',
     (tester) async {
       final startedAt = DateTime.utc(2026, 10, 12);
       final initial = SyncState(
@@ -176,23 +176,53 @@ void main() {
       );
       await tester.pump();
       expect(container.read(syncDisplayPercentageProvider), 0.75);
+      // A newly discovered retry queue resets progress, including the old
+      // interpolation target. The user sees only a lower Checking percentage.
       notifier.emit(
         repair.copyWith(
-          displayTargetBlocks: 0,
+          displayTargetBlocks: 10,
           checking: const SyncCheckingProgress(
             cycle: 2,
             percentage: 0,
-            displayTargetPercentage: 0,
+            displayTargetPercentage: 0.5,
           ),
         ),
       );
       await tester.pump();
       expect(container.read(syncDisplayPercentageProvider), 0);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(container.read(syncDisplayPercentageProvider), 0.25);
       notifier.emit(
         repair.copyWith(
           displayTargetBlocks: 0,
           checking: const SyncCheckingProgress(
             cycle: 2,
+            percentage: 0.2,
+            displayTargetPercentage: 0.2,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(container.read(syncDisplayPercentageProvider), 0.25);
+      // A changed work denominator may restart above zero, at its actual
+      // recalculated fraction rather than holding the previous display floor.
+      notifier.emit(
+        repair.copyWith(
+          displayTargetBlocks: 0,
+          checking: const SyncCheckingProgress(
+            cycle: 3,
+            percentage: 0.1,
+            displayTargetPercentage: 0.1,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(container.read(syncDisplayPercentageProvider), 0.1);
+      notifier.emit(
+        repair.copyWith(
+          displayTargetBlocks: 0,
+          checking: const SyncCheckingProgress(
+            cycle: 3,
             percentage: 1,
             displayTargetPercentage: 1,
           ),

@@ -61,6 +61,33 @@ void main() {
     );
   });
 
+  test('a drained main scan stays awake while retry work is unknown', () {
+    final sync = SyncState(
+      isSyncing: true,
+      percentage: 1,
+      phase: kSyncPhaseChainPrepare,
+      scannedHeight: 2000,
+      chainTipHeight: 2000,
+      lastSyncStartedAt: DateTime.utc(2026, 10, 12),
+    );
+    expect(isSyncKeepAwakeActiveSync(sync), isTrue);
+    expect(isSyncKeepAwakeCompletedSync(sync), isFalse);
+    expect(
+      isSyncKeepAwakeActiveSync(sync.copyWith(remainingScanBlocks: 0)),
+      isFalse,
+    );
+    final checking = sync.copyWith(
+      remainingScanBlocks: 0,
+      checking: const SyncCheckingProgress(
+        cycle: 1,
+        percentage: 1,
+        displayTargetPercentage: 1,
+      ),
+    );
+    expect(isSyncKeepAwakeActiveSync(checking), isTrue);
+    expect(isSyncKeepAwakeCompletedSync(checking), isFalse);
+  });
+
   test('near-tip catch-up requires known pending work at the chain tip', () {
     expect(
       isNearTipCatchUp(_sync(scannedHeight: 100, chainTipHeight: 102)),

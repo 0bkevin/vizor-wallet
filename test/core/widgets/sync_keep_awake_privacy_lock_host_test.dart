@@ -128,11 +128,36 @@ void main() {
       expect(find.text('Vizor is checking'), findsOneWidget);
       expect(find.text('Sync Complete'), findsNothing);
       expect(tester.takeException(), isNull);
+      notifier.emit(
+        checking.copyWith(
+          checking: const SyncCheckingProgress(
+            cycle: 2,
+            percentage: 0.1,
+            displayTargetPercentage: 0.1,
+          ),
+        ),
+      );
+      await tester.pump();
+      // A retry queue replaces the ring's old tween immediately, even when
+      // both the old and new labels are Checking.
+      expect(find.text('10%'), findsOneWidget);
+      expect(find.text('Vizor is checking'), findsOneWidget);
       await tester.tap(find.text('Unlock Vizor'));
       await tester.pumpAndSettle();
-      expect(find.text('25% Checking'), findsOneWidget);
+      expect(find.text('10% Checking'), findsOneWidget);
       expect(find.text('Synced'), findsNothing);
       expect(tester.takeException(), isNull);
+      notifier.emit(
+        checking.copyWith(
+          checking: const SyncCheckingProgress(
+            cycle: 3,
+            percentage: 0.05,
+            displayTargetPercentage: 0.05,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('5% Checking'), findsOneWidget);
       notifier.emit(
         checking.copyWith(
           isSyncing: false,

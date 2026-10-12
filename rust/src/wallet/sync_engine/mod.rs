@@ -99,7 +99,8 @@ pub enum SyncEventKind {
 }
 
 /// Additional scan work discovered after the original queue drained.
-/// The cycle identifies one repair; retries retain it and report only real work.
+/// The cycle resets UI interpolation when the measured queue changes. It is
+/// internal bookkeeping, not a user-visible repair count.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CheckingProgress {
     pub cycle: u32,
@@ -127,6 +128,29 @@ fn begin_checking(cycle: &mut u32, total: u64, tip: u64) -> SyncProgressEvent {
         remaining_scan_blocks: Some(total),
         ..preparation_progress_event(tip, "chain_prepare", 0, 0)
     }
+}
+
+/// Retry preparation carries the previous status until this queue is known.
+/// Only a nonempty queue starts a new Checking measurement; an empty queue
+/// keeps the current stage while final validation/enhancement finishes.
+fn scan_queue_progress_event(
+    cycle: &mut u32,
+    main_scan_complete: bool,
+    total: u64,
+    tip: u64,
+    pending_start: Option<u64>,
+) -> SyncProgressEvent {
+    let mut event = if total > 0 && (*cycle > 0 || main_scan_complete) {
+        begin_checking(cycle, total, tip)
+    } else {
+        SyncProgressEvent {
+            checking: checking_progress(*cycle, total, total, 0),
+            remaining_scan_blocks: Some(total),
+            ..preparation_progress_event(tip, "chain_prepare", 0, 0)
+        }
+    };
+    event.pending_scan_start_height = pending_start;
+    event
 }
 
 /// Progress event sent to caller (Dart or Swift).
@@ -257,10 +281,6 @@ const LAST_COMPLETED_SYNC_HEIGHT_KEY: &str = "last_completed_sync_height";
 const SYNC_IN_PROGRESS_KEY: &str = "sync_in_progress";
 const WITNESS_CHECK_POLICY_VERSION_KEY: &str = "witness_check_policy_version";
 const WITNESS_CHECK_LAST_CLEAN_HEIGHT_KEY: &str = "witness_check_last_clean_height";
-// Witness repair is finalization work after the main scan drains. Cap its
-// starting display percentage so a long repair pass is visible instead of
-// looking pinned at 99%, while still avoiding a misleading deep rewind signal.
-const TAIL_REPAIR_MAX_START_PERCENTAGE: f64 = 0.95;
 // `truncate_to_chain_state` only injects a canonical frontier when the requested
 // height is below the retained checkpoint window. Start at the pruning depth
 // and escalate so corrupted anchor checkpoints do not survive the repair.
@@ -383,16 +403,6 @@ fn chain_window_percentage(window_start_height: u64, tip_height: u64, scanned_he
     (scanned as f64 / total as f64).clamp(0.0, 1.0)
 }
 
-fn tail_repair_percentage(base_percentage: f64, total_blocks: u64, remaining_blocks: u64) -> f64 {
-    if total_blocks == 0 {
-        return 1.0;
-    }
-    let completed = total_blocks.saturating_sub(remaining_blocks);
-    let repair_fraction = completed as f64 / total_blocks as f64;
-    let base = base_percentage.clamp(0.0, TAIL_REPAIR_MAX_START_PERCENTAGE);
-    (base + ((1.0 - base) * repair_fraction)).clamp(0.0, 1.0)
-}
-
 fn chain_window_frontier_height(ranges: &[ScanRange], fallback_height: u64) -> u64 {
     earliest_pending_scan_start(ranges).unwrap_or(fallback_height)
 }
@@ -414,13 +424,7 @@ fn chain_window_target_height_after_batch(
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ProgressDisplayMode {
     Work,
-    ChainWindow {
-        window_start_height: u64,
-    },
-    TailRepair {
-        base_percentage: f64,
-        total_blocks: u64,
-    },
+    ChainWindow { window_start_height: u64 },
 }
 
 impl ProgressDisplayMode {
@@ -442,10 +446,6 @@ impl ProgressDisplayMode {
             ProgressDisplayMode::ChainWindow {
                 window_start_height,
             } => chain_window_percentage(window_start_height, tip_height, scanned_height),
-            ProgressDisplayMode::TailRepair {
-                base_percentage,
-                total_blocks,
-            } => tail_repair_percentage(base_percentage, total_blocks, remaining_blocks),
         }
     }
 
@@ -468,19 +468,6 @@ impl ProgressDisplayMode {
                 tip_height,
                 scanned_height.saturating_add(blocks),
             ),
-            ProgressDisplayMode::TailRepair {
-                base_percentage,
-                total_blocks,
-            } => {
-                let target_remaining = remaining_blocks.saturating_sub(blocks);
-                tail_repair_percentage(base_percentage, total_blocks, target_remaining)
-            }
-        }
-    }
-
-    fn extend_work(&mut self, new_total: u64) {
-        if let ProgressDisplayMode::TailRepair { total_blocks, .. } = self {
-            *total_blocks = (*total_blocks).max(new_total);
         }
     }
 
@@ -489,9 +476,7 @@ impl ProgressDisplayMode {
             ProgressDisplayMode::ChainWindow { .. } => {
                 chain_window_frontier_height(ranges, u32::from(batch_start) as u64)
             }
-            ProgressDisplayMode::Work | ProgressDisplayMode::TailRepair { .. } => {
-                u32::from(batch_start) as u64
-            }
+            ProgressDisplayMode::Work => u32::from(batch_start) as u64,
         }
     }
 
@@ -505,9 +490,7 @@ impl ProgressDisplayMode {
             ProgressDisplayMode::ChainWindow { .. } => {
                 chain_window_frontier_height(post_ranges, tip_height)
             }
-            ProgressDisplayMode::Work | ProgressDisplayMode::TailRepair { .. } => {
-                u32::from(batch_end) as u64
-            }
+            ProgressDisplayMode::Work => u32::from(batch_end) as u64,
         }
     }
 
@@ -533,14 +516,13 @@ impl ProgressDisplayMode {
                     u32::from(batch_start) as u64,
                 ),
             ),
-            ProgressDisplayMode::Work | ProgressDisplayMode::TailRepair { .. } => self
-                .target_percentage_after_blocks(
-                    initial_total,
-                    remaining_blocks,
-                    u32::from(batch_start) as u64,
-                    tip_height,
-                    u32::from(batch_end).saturating_sub(u32::from(batch_start)) as u64,
-                ),
+            ProgressDisplayMode::Work => self.target_percentage_after_blocks(
+                initial_total,
+                remaining_blocks,
+                u32::from(batch_start) as u64,
+                tip_height,
+                u32::from(batch_end).saturating_sub(u32::from(batch_start)) as u64,
+            ),
         }
     }
 }
@@ -2749,7 +2731,10 @@ pub async fn run_sync_inner(
         }
 
         progress.lock().unwrap().start_attempt();
-        let checking_cycle = progress.lock().unwrap().checking_cycle();
+        let (checking_cycle, main_scan_complete) = {
+            let progress = progress.lock().unwrap();
+            (progress.checking_cycle(), progress.main_scan_complete())
+        };
         let report_progress = |event| {
             let event = progress.lock().unwrap().report(event);
             progress_fn(event);
@@ -2766,6 +2751,7 @@ pub async fn run_sync_inner(
             allow_resubmit,
             &report_progress,
             checking_cycle,
+            main_scan_complete,
         )
         .await
         {
@@ -3102,6 +3088,7 @@ async fn run_sync_impl(
     allow_resubmit: bool,
     progress_fn: &(impl Fn(SyncProgressEvent) + Send + Sync),
     mut checking_cycle: u32,
+    main_scan_complete: bool,
 ) -> Result<(), SyncError> {
     if crate::wallet::sync::proposal_locks::is_shutting_down() {
         return Ok(());
@@ -3452,19 +3439,19 @@ async fn run_sync_impl(
         .suggest_scan_ranges()
         .map_err(|e| SyncError::db(format!("suggest_scan_ranges: {e}")))?;
     let mut initial_total = pending_scan_blocks(&initial_ranges);
-    progress_fn(SyncProgressEvent {
-        checking: checking_progress(checking_cycle, initial_total, initial_total, 0),
-        remaining_scan_blocks: Some(initial_total),
-        pending_scan_start_height: earliest_pending_scan_start(&initial_ranges),
-        ..preparation_progress_event(current_tip_height, "chain_prepare", 0, 0)
-    });
+    progress_fn(scan_queue_progress_event(
+        &mut checking_cycle,
+        main_scan_complete,
+        initial_total,
+        current_tip_height,
+        earliest_pending_scan_start(&initial_ranges),
+    ));
     let initial_window_start_height =
         earliest_pending_scan_start(&initial_ranges).unwrap_or(current_tip_height);
     let mut queued_ranges = Some(initial_ranges);
     let mut voting_scan_end = None;
     let mut prev_remaining = initial_total;
     let mut progress_display_mode = ProgressDisplayMode::Work;
-    let mut last_progress_percentage: f64 = 0.0;
     log::info!("[{}] sync: {} blocks to scan", elapsed(), initial_total);
 
     // Reorg-triggered rewinds are split between the verify and main scan
@@ -3825,11 +3812,7 @@ async fn run_sync_impl(
                             current_tip_height,
                         ));
                     }
-                    progress_display_mode = ProgressDisplayMode::TailRepair {
-                        base_percentage: last_progress_percentage
-                            .min(TAIL_REPAIR_MAX_START_PERCENTAGE),
-                        total_blocks: repair_pending_blocks,
-                    };
+                    progress_display_mode = ProgressDisplayMode::Work;
                     prefetch = None;
                     continue;
                 } else if let Some(repair_pending_blocks) = repair_anchor_root_mismatch_if_needed(
@@ -3994,11 +3977,10 @@ async fn run_sync_impl(
             end,
             current_tip_height,
         );
-        last_progress_percentage = current_pct.clamp(0.0, 1.0);
         progress_fn(SyncProgressEvent {
             scanned_height: u32::from(start) as u64,
             chain_tip_height: current_tip_height,
-            percentage: last_progress_percentage,
+            percentage: current_pct.clamp(0.0, 1.0),
             display_target_percentage,
             display_target_blocks: batch_blocks,
             remaining_scan_blocks: Some(pending_scan_blocks(&ranges)),
@@ -4637,7 +4619,11 @@ async fn run_sync_impl(
                 new_total
             );
             initial_total = new_total;
-            progress_display_mode.extend_work(new_total);
+            if checking_cycle > 0 {
+                // The denominator changed. Let Checking show its recalculated
+                // fraction instead of holding the previous UI progress floor.
+                checking_cycle += 1;
+            }
         }
         prev_remaining = remaining;
         let display_scanned_height =
@@ -4699,7 +4685,6 @@ async fn run_sync_impl(
             phase_total_units: 0,
             phase: "scan".into(),
         };
-        last_progress_percentage = progress.percentage;
         log::info!(
             "[{}] sync: {:.1}% (remaining={}/{}, scanned={})",
             elapsed(),
@@ -6128,35 +6113,6 @@ mod tests {
         let display_height_after = mode.batch_end_height(&post_ranges, high_range_end, 2_000);
         assert_eq!(display_height_after, 1_700);
         assert_pct(mode.percentage(0, 0, display_height_after, 2_000), 0.7);
-    }
-
-    #[test]
-    fn tail_repair_progress_starts_near_completion_and_advances_by_repair_work() {
-        let mode = ProgressDisplayMode::TailRepair {
-            base_percentage: 0.99,
-            total_blocks: 100,
-        };
-
-        assert_pct(mode.percentage(100, 100, 50, 1_000), 0.95);
-        assert_pct(
-            mode.target_percentage_after_blocks(100, 100, 50, 1_000, 50),
-            0.975,
-        );
-        assert_pct(mode.percentage(100, 0, 50, 1_000), 1.0);
-    }
-
-    #[test]
-    fn tail_repair_progress_does_not_jump_forward_when_sync_was_not_near_done() {
-        let mode = ProgressDisplayMode::TailRepair {
-            base_percentage: 0.8,
-            total_blocks: 100,
-        };
-
-        assert_pct(mode.percentage(100, 100, 50, 1_000), 0.8);
-        assert_pct(
-            mode.target_percentage_after_blocks(100, 100, 50, 1_000, 50),
-            0.9,
-        );
     }
 
     #[test]

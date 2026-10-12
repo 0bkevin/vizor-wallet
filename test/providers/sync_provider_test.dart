@@ -754,8 +754,8 @@ void main() {
         const SyncProgressEvent(
           scannedHeight: 0,
           chainTipHeight: 200,
-          percentage: 0.95,
-          displayTargetPercentage: 0.95,
+          percentage: 1,
+          displayTargetPercentage: 1,
           displayTargetBlocks: 0,
           checking: SyncCheckingProgress(
             cycle: 1,

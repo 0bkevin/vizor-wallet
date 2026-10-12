@@ -247,7 +247,9 @@ bool isSyncKeepAwakeEligibleSync(SyncState sync) {
 bool isSyncKeepAwakeActiveSync(SyncState sync) {
   if (!sync.isSyncing ||
       sync.isBackgroundMode ||
-      (!sync.isChecking && sync.percentage >= 1) ||
+      (!sync.isChecking &&
+          sync.percentage >= 1 &&
+          sync.remainingScanBlocks != null) ||
       sync.lastSyncStartedAt == null) {
     return false;
   }

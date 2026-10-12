@@ -1,4 +1,4 @@
-use super::{CheckingProgress, SyncEventKind, SyncProgressEvent, TAIL_REPAIR_MAX_START_PERCENTAGE};
+use super::{CheckingProgress, SyncEventKind, SyncProgressEvent};
 
 /// Each attempt measures only its remaining scan work. Keep the completed
 /// portion of this sync session when a transient failure starts another attempt.
@@ -6,55 +6,39 @@ use super::{CheckingProgress, SyncEventKind, SyncProgressEvent, TAIL_REPAIR_MAX_
 pub(super) struct RetryProgress {
     attempt_base: f64,
     completed: f64,
-    checking_cycle: u32,
-    checking_completed: f64,
-    checking_attempt_base: f64,
+    checking: Option<CheckingProgress>,
 }
 
 impl RetryProgress {
-    /// Carry completed scan work forward, leaving room for unfinished repairs.
+    /// Carry ordinary scan progress forward. Additional scans have their own
+    /// queue-based Checking progress, so no tail percentage needs reserving.
     pub(super) fn start_attempt(&mut self) {
-        // A drained scan can still queue repairs and fail before completion.
-        // Reuse the tail-repair allowance instead of pinning the retry at 100%.
-        self.completed = if self.completed < 1.0 {
-            self.completed
-        } else {
-            TAIL_REPAIR_MAX_START_PERCENTAGE
-        };
         self.attempt_base = self.completed;
-        if self.checking_completed >= 1.0 {
-            self.checking_completed = TAIL_REPAIR_MAX_START_PERCENTAGE;
-        }
-        self.checking_attempt_base = self.checking_completed;
     }
 
     pub(super) fn checking_cycle(&self) -> u32 {
-        self.checking_cycle
+        self.checking.map_or(0, |checking| checking.cycle)
+    }
+
+    pub(super) fn main_scan_complete(&self) -> bool {
+        self.completed >= 1.0
     }
 
     /// Map attempt-local progress and its download target into this session.
     pub(super) fn report(&mut self, mut event: SyncProgressEvent) -> SyncProgressEvent {
         if event.kind != SyncEventKind::Progress {
             event.checking = None;
-        } else if let Some(checking) = event.checking.as_mut() {
-            if checking.cycle != self.checking_cycle {
-                self.checking_cycle = checking.cycle;
-                self.checking_completed = 0.0;
-                self.checking_attempt_base = 0.0;
-            }
-            let remaining = 1.0 - self.checking_attempt_base;
-            checking.percentage =
-                self.checking_attempt_base + remaining * checking.percentage.clamp(0.0, 1.0);
-            checking.display_target_percentage = self.checking_attempt_base
-                + remaining * checking.display_target_percentage.clamp(0.0, 1.0);
-            self.checking_completed = self.checking_completed.max(checking.percentage);
-        } else if self.checking_cycle > 0 {
+        } else if let Some(checking) = event.checking {
+            // Each discovered queue reports its own fraction. Retries and new
+            // work may lower it; the cycle resets only the UI interpolation.
+            self.checking = Some(checking);
+        } else if let Some(checking) = self.checking {
             // Retry preparation precedes queue discovery. Keep the stage and
             // committed fraction, without interpolating the previous batch.
             event.checking = Some(CheckingProgress {
-                cycle: self.checking_cycle,
-                percentage: self.checking_completed,
-                display_target_percentage: self.checking_completed,
+                cycle: checking.cycle,
+                percentage: checking.percentage,
+                display_target_percentage: checking.percentage,
             });
             event.display_target_blocks = 0;
         }
@@ -62,6 +46,12 @@ impl RetryProgress {
         event.percentage = self.attempt_base + remaining * event.percentage.clamp(0.0, 1.0);
         event.display_target_percentage =
             self.attempt_base + remaining * event.display_target_percentage.clamp(0.0, 1.0);
+        if event.checking.is_some() {
+            // The main scan stays finished; Checking alone measures the work
+            // discovered after it. Do not make ETA/other consumers see a rewind.
+            event.percentage = 1.0;
+            event.display_target_percentage = 1.0;
+        }
         // A download target is an estimate, not completed work. Carry forward
         // only reported progress, including across multiple failed attempts.
         self.completed = self.completed.max(event.percentage);
@@ -72,7 +62,7 @@ impl RetryProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wallet::sync_engine::preparation_progress_event;
+    use crate::wallet::sync_engine::{preparation_progress_event, scan_queue_progress_event};
 
     fn scan(percentage: f64, target: f64) -> SyncProgressEvent {
         SyncProgressEvent {
@@ -96,27 +86,43 @@ mod tests {
     }
 
     #[test]
-    fn checking_retries_keep_cycle_and_committed_work_without_carrying_estimates() {
+    fn checking_retry_preserves_preparation_then_measures_new_queue_without_accumulation() {
         let mut progress = RetryProgress::default();
         progress.start_attempt();
         progress.report(scan(1.0, 1.0));
-        let before = progress.report(checking(1, 0.25, 0.9)).checking.unwrap();
-        assert_eq!(before.percentage, 0.25);
+        progress.report(checking(1, 0.75, 0.9));
         progress.start_attempt();
-        assert_eq!(progress.checking_cycle(), 1);
         let prep = progress.report(preparation_progress_event(100, "chain_prepare", 0, 0));
-        assert_eq!(prep.checking.unwrap().percentage, 0.25);
+        let carried = prep.checking.unwrap();
+        assert_eq!(carried.cycle, 1);
+        assert_eq!(carried.percentage, 0.75);
+        assert_eq!(carried.display_target_percentage, 0.75);
         assert_eq!(prep.display_target_blocks, 0);
-        let after = progress.report(checking(1, 0.5, 0.8)).checking.unwrap();
-        assert_eq!(after.percentage, 0.625);
-        assert!((after.display_target_percentage - 0.85).abs() < 1e-12);
+        assert_eq!(prep.percentage, 1.0);
+
+        let mut cycle = progress.checking_cycle();
+        let queue = progress.report(scan_queue_progress_event(
+            &mut cycle,
+            progress.main_scan_complete(),
+            200,
+            1000,
+            Some(800),
+        ));
+        assert_eq!(queue.checking.unwrap().cycle, 2);
+        assert_eq!(queue.checking.unwrap().percentage, 0.0);
+        assert_eq!(queue.remaining_scan_blocks, Some(200));
+        assert_eq!(queue.pending_scan_start_height, Some(800));
+        let after = progress.report(checking(cycle, 0.5, 0.8));
+        assert_eq!(after.checking.unwrap().percentage, 0.5);
+        assert_eq!(after.checking.unwrap().display_target_percentage, 0.8);
+        assert_eq!(after.percentage, 1.0);
+
+        // Another preparation failure must keep the latest authoritative
+        // fraction; restarting before queue discovery does not fabricate work.
         progress.start_attempt();
-        let repeated = progress.report(checking(1, 0.5, 1.0)).checking.unwrap();
-        assert_eq!(repeated.percentage, 0.8125);
-        let next_cycle = progress.report(checking(2, 0.0, 0.25)).checking.unwrap();
-        assert_eq!(next_cycle.cycle, 2);
-        assert_eq!(next_cycle.percentage, 0.0);
-        assert_eq!(next_cycle.display_target_percentage, 0.25);
+        let prep = progress.report(preparation_progress_event(1000, "chain_prepare", 0, 0));
+        assert_eq!(prep.checking.unwrap().cycle, 2);
+        assert_eq!(prep.checking.unwrap().percentage, 0.5);
         let done = progress.report(SyncProgressEvent {
             kind: SyncEventKind::Completed,
             is_syncing: false,
@@ -126,13 +132,33 @@ mod tests {
     }
 
     #[test]
-    fn retry_after_checking_drains_still_has_room_for_unfinished_work() {
+    fn retry_after_checking_drains_starts_new_measurement_only_if_work_remains() {
         let mut progress = RetryProgress::default();
         progress.report(checking(1, 1.0, 1.0));
         progress.start_attempt();
-        let next = progress.report(checking(1, 0.5, 0.8)).checking.unwrap();
-        assert!(next.percentage > 0.95 && next.percentage < 1.0);
-        assert!(next.display_target_percentage > next.percentage);
+        let prep = progress.report(preparation_progress_event(1000, "chain_prepare", 0, 0));
+        assert_eq!(prep.checking.unwrap().percentage, 1.0);
+        let mut cycle = progress.checking_cycle();
+        let empty = progress.report(scan_queue_progress_event(&mut cycle, true, 0, 1000, None));
+        assert_eq!(empty.checking.unwrap().cycle, 1);
+        assert_eq!(empty.checking.unwrap().percentage, 1.0);
+        let remaining = progress.report(scan_queue_progress_event(
+            &mut cycle,
+            true,
+            100,
+            1000,
+            Some(900),
+        ));
+        assert_eq!(remaining.checking.unwrap().cycle, 2);
+        assert_eq!(remaining.checking.unwrap().percentage, 0.0);
+        assert_eq!(
+            progress
+                .report(checking(cycle, 0.5, 0.8))
+                .checking
+                .unwrap()
+                .percentage,
+            0.5
+        );
     }
 
     #[test]
@@ -173,39 +199,59 @@ mod tests {
     }
 
     #[test]
-    fn retry_after_scan_drains_leaves_room_for_unfinished_repairs() {
+    fn retry_after_main_scan_drains_uses_checking_instead_of_a_tail_budget() {
         let mut progress = RetryProgress::default();
         progress.start_attempt();
         let drained = progress.report(scan(1.0, 1.0));
-        assert_eq!(drained.percentage, 1.0);
         assert_eq!(drained.kind, SyncEventKind::Progress);
-
-        // Repair scanning can fail after the original scan queue drained.
-        progress.report(scan(0.95, 0.96));
-        let mut previous_repair_percentage = TAIL_REPAIR_MAX_START_PERCENTAGE;
+        assert!(progress.main_scan_complete());
         for _ in 0..3 {
             progress.start_attempt();
-            let preparation =
-                progress.report(preparation_progress_event(3_500_000, "chain_prepare", 0, 0));
-            assert_eq!(preparation.percentage, previous_repair_percentage);
-            let repair = progress.report(scan(0.5, 0.8));
-            assert!(preparation.percentage < repair.percentage);
-            assert!(repair.percentage < repair.display_target_percentage);
-            assert!(repair.display_target_percentage < 1.0);
-            assert!(repair.is_syncing);
-            assert_eq!(repair.kind, SyncEventKind::Progress);
-            previous_repair_percentage = repair.percentage;
+            let prep = progress.report(preparation_progress_event(1000, "chain_prepare", 0, 0));
+            assert_eq!(prep.percentage, 1.0);
+            let mut cycle = progress.checking_cycle();
+            let queue = progress.report(scan_queue_progress_event(
+                &mut cycle,
+                progress.main_scan_complete(),
+                100,
+                1000,
+                Some(900),
+            ));
+            assert_eq!(queue.checking.unwrap().percentage, 0.0);
+            let repair = progress.report(checking(cycle, 0.5, 0.8));
+            assert_eq!(repair.percentage, 1.0);
+            assert_eq!(repair.checking.unwrap().percentage, 0.5);
+            assert_eq!(repair.checking.unwrap().display_target_percentage, 0.8);
         }
+    }
 
-        let done = progress.report(SyncProgressEvent {
-            kind: SyncEventKind::Completed,
-            is_syncing: false,
-            ..scan(1.0, 1.0)
-        });
-        assert_eq!(done.percentage, 1.0);
-        assert_eq!(done.display_target_percentage, 1.0);
-        assert_eq!(done.kind, SyncEventKind::Completed);
-        assert!(!done.is_syncing);
+    #[test]
+    fn retry_during_main_scan_does_not_enter_checking_and_empty_queue_does_not_start_it() {
+        let mut progress = RetryProgress::default();
+        progress.report(scan(0.5, 0.8));
+        progress.start_attempt();
+        let mut cycle = progress.checking_cycle();
+        let queue = progress.report(scan_queue_progress_event(
+            &mut cycle,
+            progress.main_scan_complete(),
+            100,
+            1000,
+            Some(900),
+        ));
+        assert!(queue.checking.is_none());
+        assert_eq!(queue.percentage, 0.5);
+        progress.report(scan(1.0, 1.0));
+        progress.start_attempt();
+        let empty = progress.report(scan_queue_progress_event(
+            &mut cycle,
+            progress.main_scan_complete(),
+            0,
+            1000,
+            None,
+        ));
+        assert!(empty.checking.is_none());
+        assert_eq!(empty.percentage, 1.0);
+        assert_eq!(empty.kind, SyncEventKind::Progress);
     }
 
     #[test]
