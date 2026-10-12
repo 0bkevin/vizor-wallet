@@ -2425,6 +2425,43 @@ Widget buildDesktopHomeSidebarSyncNetworkErrorUseCase(BuildContext context) {
   );
 }
 
+Widget buildDesktopHomeCheckingUseCase(BuildContext context) {
+  return _buildDesktopHomeUseCase(
+    accountState: _accountsDesignState,
+    syncState: _homeCheckingSyncState(),
+    migrationCta: const IronwoodHomeMigrationCtaState.hidden(),
+    networkPrivacyState: const NetworkPrivacyState.off(),
+    zecUsdPrice: 70,
+  );
+}
+
+Widget buildMobileHomeCheckingUseCase(BuildContext context) {
+  return _buildMobileHomeUseCase(
+    accountState: _accountsDesignState,
+    syncState: _homeCheckingSyncState(),
+    networkPrivacyState: const NetworkPrivacyState.off(),
+    constrainToPreviewFrame: false,
+  );
+}
+
+SyncState _homeCheckingSyncState() =>
+    _homeSyncedState(
+      orchardBalance: BigInt.from(14_312_000_000),
+      recentTransactions: [_homeTx(1), _homeTx(2)],
+    ).copyWith(
+      isSyncing: true,
+      isSyncComplete: false,
+      phase: 'scan',
+      remainingScanBlocks: 250,
+      pendingScanStartHeight: 3_427_894,
+      lastSyncStartedAt: DateTime.utc(2026, 10, 12),
+      checking: const SyncCheckingProgress(
+        cycle: 1,
+        percentage: 0.75,
+        displayTargetPercentage: 0.75,
+      ),
+    );
+
 const _previewTorConnecting = NetworkPrivacyState(
   torEnabled: true,
   status: NetworkPrivacyConnectionStatus.connecting,

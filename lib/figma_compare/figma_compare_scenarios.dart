@@ -2137,6 +2137,13 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     mobile: true,
   ),
   FigmaCompareScenario(
+    id: 'mobile-home-checking',
+    description: 'Mobile home with additional sync work at 75% Checking',
+    builder: buildMobileHomeCheckingUseCase,
+    desktop: false,
+    mobile: true,
+  ),
+  FigmaCompareScenario(
     id: 'mobile-home-tor-connecting',
     description: 'Mobile home while the Tor route is still connecting',
     builder: buildMobileHomeTorConnectingUseCase,
@@ -2448,6 +2455,12 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     id: 'desktop-home-sidebar-sync-network-error',
     description: 'Desktop home sidebar with a network sync failure',
     builder: buildDesktopHomeSidebarSyncNetworkErrorUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'desktop-home-checking',
+    description: 'Desktop home with additional sync work at 75% Checking',
+    builder: buildDesktopHomeCheckingUseCase,
+    platform: TargetPlatform.macOS,
   ),
   FigmaCompareScenario(
     id: 'desktop-home-tor-connecting',
