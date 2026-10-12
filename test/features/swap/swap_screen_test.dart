@@ -39,6 +39,7 @@ import 'package:zcash_wallet/src/features/swap/models/swap_models.dart';
 import 'package:zcash_wallet/src/features/swap/providers/swap_hardware_signing_service.dart';
 import 'package:zcash_wallet/src/features/swap/providers/pay_deposit_transaction_provider.dart';
 import 'package:zcash_wallet/src/features/swap/providers/swap_state_provider.dart';
+import 'package:zcash_wallet/src/features/swap/providers/swap_ledger_completion_service.dart';
 import 'package:zcash_wallet/src/features/swap/providers/swap_deposit_sender.dart';
 import 'package:zcash_wallet/src/features/swap/providers/swap_max_amount_estimator.dart';
 import 'package:zcash_wallet/src/features/swap/providers/swap_activity_store.dart';
@@ -9966,6 +9967,65 @@ void main() {
     },
   );
 
+  for (final payMode in [false, true]) {
+    testWidgets(
+      'partial Ledger ${payMode ? 'pay' : 'swap'} completion saves uncertain activity without provider submit',
+      (tester) async {
+        await _setDesktopViewport(tester);
+        final provider = _FakeSwapProvider();
+        final store = _FakeSwapPersistenceStore();
+        final operations = _FakeLedgerSignedOperationService();
+        await tester.pumpWidget(
+          _routerHarness(
+            GoRouter(
+              initialLocation: '/swap',
+              routes: [_swapRoute(), _swapActivityRoute()],
+            ),
+            bootstrap: _hardwareBootstrap,
+            seedSwapActivityFixtures: false,
+            swapProvider: provider,
+            sessionStore: store,
+            ledgerOperationService: operations,
+          ),
+        );
+        await tester.pumpAndSettle();
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(SwapScreen)),
+        );
+        final intent = _persistedIntent(
+          id: 'partial-deposit',
+          txHash: null,
+          status: SwapIntentStatus.awaitingDeposit,
+        ).copyWith(payMode: payMode);
+        await container
+            .read(swapLedgerCompletionServiceProvider)
+            .complete(
+              intent,
+              const LedgerSignedOperationBroadcastResult(
+                operationId: 'partial-op',
+                txid: 'mined-parent,expired-child',
+                status: 'partial_broadcast',
+                message: 'The remaining round expired',
+                requiresAck: true,
+              ),
+            );
+        expect(operations.acknowledged, ['partial-op']);
+        expect(operations.broadcasts, isEmpty);
+        expect(provider.submittedDeposits, isEmpty);
+        final saved = store.savedIntents.single;
+        expect(saved.id, intent.id);
+        expect(saved.payMode, payMode);
+        expect(saved.depositTxHash, 'mined-parent,expired-child');
+        expect(saved.broadcastStatus, 'partial_broadcast');
+        expect(saved.broadcastNotice, 'The remaining round expired');
+        // Potential funds on the network must still protect account deletion.
+        expect(saved.hasConfirmedDepositEvidence, isTrue);
+        expect(saved.status, SwapIntentStatus.awaitingDeposit);
+        expect(saved.hasProviderObservedDepositEvidence, isFalse);
+      },
+    );
+  }
+
   testWidgets(
     'hardware ZEC unknown broadcast is checkpointed without provider submit',
     (tester) async {
@@ -10877,6 +10937,10 @@ rust_sync.TransactionInfo _sentZecTx({
     expiredUnmined: false,
     accountBalanceDelta: -zatoshi.toInt(),
     fee: BigInt.from(15000),
+    feeState: rust_sync.TransactionFeeState.known,
+    detailsComplete: true,
+    provisional: false,
+    amountIncludesFee: false,
     blockTime: BigInt.from(1800000000),
     isTransparent: false,
     txKind: 'sent',
@@ -10896,6 +10960,10 @@ rust_sync.TransactionInfo _receivedZecTx({
     expiredUnmined: false,
     accountBalanceDelta: zatoshi.toInt(),
     fee: BigInt.zero,
+    feeState: rust_sync.TransactionFeeState.notApplicable,
+    detailsComplete: true,
+    provisional: false,
+    amountIncludesFee: false,
     blockTime: BigInt.from(1800000000),
     isTransparent: false,
     txKind: 'received',

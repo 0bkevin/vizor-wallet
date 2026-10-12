@@ -14,6 +14,7 @@ import '../../../core/layout/app_pane_scroll_scaffold.dart';
 import '../../../core/storage/wallet_paths.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../providers/account_provider.dart';
+import '../../../providers/enhance_pir_provider.dart';
 import '../../../providers/privacy_mode_provider.dart';
 import '../../../providers/rpc_endpoint_provider.dart';
 import '../../../providers/sync_provider.dart';
@@ -292,9 +293,18 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     ref.listen<AsyncValue<SyncState>>(syncProvider, (previous, next) {
       final prevSig = _recentSignature(previous?.value);
       final nextSig = _recentSignature(next.value);
-      if (prevSig != nextSig) {
+      // Enhancement can change older rows outside the ten recent transactions.
+      final syncCompleted =
+          next.value?.isSyncComplete == true &&
+          previous?.value?.isSyncComplete != true;
+      if (prevSig != nextSig || syncCompleted) {
         _refreshTransactionsAfterSyncChange();
       }
+    });
+
+    // Recovery and detail updates can change rows outside recent history.
+    ref.listen<int>(syncFollowupProvider, (_, _) {
+      _refreshTransactionsAfterSyncChange();
     });
 
     final accountUuid = ref.watch(accountProvider).value?.activeAccountUuid;
@@ -345,6 +355,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
             row: buildTransactionActivityRow(
               context: context,
               transaction: tx,
+              privateQueriesEnabled: ref.watch(enhancePirProvider),
               showPendingEstimate: !ref
                   .watch(activityEtaExcludedTxidsProvider)
                   .contains(activityTxidKey(tx.txidHex)),

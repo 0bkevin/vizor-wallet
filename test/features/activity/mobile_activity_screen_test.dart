@@ -62,15 +62,26 @@ rust_sync.TransactionInfo _tx({
   bool expiredUnmined = false,
   BigInt? displayAmount,
   String displayPool = 'shielded',
+  BigInt? fee,
+  bool amountIncludesFee = false,
+  int accountBalanceDelta = 0,
+  bool isTransparent = false,
+  bool? provisional,
 }) {
   return rust_sync.TransactionInfo(
     txidHex: txidHex,
     minedHeight: minedHeight ?? BigInt.one,
     expiredUnmined: expiredUnmined,
-    accountBalanceDelta: 0,
-    fee: BigInt.zero,
+    accountBalanceDelta: accountBalanceDelta,
+    fee: fee ?? BigInt.zero,
+    feeState: fee == null
+        ? rust_sync.TransactionFeeState.notApplicable
+        : rust_sync.TransactionFeeState.known,
+    detailsComplete: !amountIncludesFee,
+    provisional: provisional ?? amountIncludesFee,
+    amountIncludesFee: amountIncludesFee,
     blockTime: blockTime,
-    isTransparent: false,
+    isTransparent: isTransparent,
     txKind: kind,
     displayAmount: displayAmount ?? BigInt.from(100000000),
     displayPool: displayPool,
@@ -220,46 +231,49 @@ void main() {
     },
   );
 
-  for (final newBlock in [false, true]) {
-    testWidgets(
-      'sync completion refreshes older history (new block: $newBlock)',
-      (tester) async {
-        final before = SyncState(
-          accountUuid: 'account-1',
-          hasAccountScopedData: true,
-          isSyncComplete: true,
-          lastSyncCompletedAt: DateTime.utc(2026, 10, 6),
-        );
-        final sync = FakeSyncNotifier(before);
-        var reads = 0;
-        var refreshing = false;
-        final refreshed = Completer<List<rust_sync.TransactionInfo>>();
-        await tester.pumpWidget(
-          _app(
-            (_) async {
-              reads++;
-              if (!refreshing) {
-                return [
-                  _tx(
-                    txidHex: 'old-pending',
-                    blockTime: BigInt.zero,
-                    minedHeight: BigInt.zero,
-                    kind: 'sent',
-                  ),
-                ];
-              }
-              return refreshed.future;
-            },
-            syncNotifier: sync,
-            etaLabels: const {'old-pending': 'Est. 1–3 min'},
-          ),
-        );
-        await tester.pump(const Duration(milliseconds: 300));
-        await tester.pump(const Duration(milliseconds: 300));
-        expect(find.text('Est. 1–3 min'), findsOneWidget);
-        final initialReads = reads;
-        refreshing = true;
-        // The recent-ten history is unchanged (empty); this older transaction mined.
+  for (final update in ['completion', 'new block', 'follow-up']) {
+    final newBlock = update == 'new block';
+    testWidgets('sync $update refreshes older history', (tester) async {
+      final before = SyncState(
+        accountUuid: 'account-1',
+        hasAccountScopedData: true,
+        isSyncComplete: true,
+        lastSyncCompletedAt: DateTime.utc(2026, 10, 6),
+      );
+      final sync = FakeSyncNotifier(before);
+      var reads = 0;
+      var refreshing = false;
+      final refreshed = Completer<List<rust_sync.TransactionInfo>>();
+      await tester.pumpWidget(
+        _app(
+          (_) async {
+            reads++;
+            if (!refreshing) {
+              return [
+                _tx(
+                  txidHex: 'old-pending',
+                  blockTime: BigInt.zero,
+                  minedHeight: BigInt.zero,
+                  kind: 'sent',
+                ),
+              ];
+            }
+            return refreshed.future;
+          },
+          syncNotifier: sync,
+          etaLabels: const {'old-pending': 'Est. 1–3 min'},
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Est. 1–3 min'), findsOneWidget);
+      final initialReads = reads;
+      refreshing = true;
+      // The recent-ten history is unchanged (empty); this older transaction mined.
+      if (update == 'follow-up') {
+        // Only older history changed; recent rows and sync state stay the same.
+        sync.reportFollowupUpdated();
+      } else {
         sync.emit(
           before.copyWith(
             scannedHeight: newBlock ? 101 : before.scannedHeight,
@@ -267,23 +281,29 @@ void main() {
             lastSyncCompletedAt: DateTime.utc(2026, 10, 6, 0, 1),
           ),
         );
-        await tester.pump(const Duration(milliseconds: 300));
-        expect(reads, initialReads + 1);
-        expect(find.text('Est. 1–3 min'), findsNothing);
-        expect(find.text('Checking status'), findsOneWidget);
-        refreshed.complete([
-          _tx(
-            txidHex: 'old-pending',
-            blockTime: BigInt.from(1800000000),
-            kind: 'sent',
-          ),
-        ]);
-        await tester.pump(const Duration(milliseconds: 300));
-        await tester.pumpAndSettle();
-        expect(find.text('Sent'), findsOneWidget);
-        expect(find.text('Est. 1–3 min'), findsNothing);
-      },
-    );
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(reads, initialReads + 1);
+      expect(
+        find.text('Est. 1–3 min'),
+        update == 'follow-up' ? findsOneWidget : findsNothing,
+      );
+      expect(
+        find.text('Checking status'),
+        update == 'follow-up' ? findsNothing : findsOneWidget,
+      );
+      refreshed.complete([
+        _tx(
+          txidHex: 'old-pending',
+          blockTime: BigInt.from(1800000000),
+          kind: 'sent',
+        ),
+      ]);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      expect(find.text('Sent'), findsOneWidget);
+      expect(find.text('Est. 1–3 min'), findsNothing);
+    });
   }
 
   testWidgets('ETA and status subtitles fit a standard mobile activity row', (
@@ -480,6 +500,47 @@ void main() {
     expect(find.text('Sending...'), findsNothing);
     expect(find.text('Sent'), findsNothing);
     expect(find.text('Transparent'), findsNothing);
+  });
+
+  testWidgets('a fee-only entry reads as its network fee', (tester) async {
+    final blockTime = BigInt.from(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000 - 60,
+    );
+    await tester.pumpWidget(
+      _app(
+        (_) async => [
+          // An established transparent self-transfer: the whole change is its fee.
+          _tx(
+            txidHex: 'aa',
+            blockTime: blockTime,
+            kind: 'sent',
+            displayPool: 'transparent',
+            isTransparent: true,
+            provisional: false,
+            accountBalanceDelta: -65000,
+            displayAmount: BigInt.from(65000),
+            fee: BigInt.from(65000),
+            amountIncludesFee: true,
+          ),
+          // A net change that includes the fee keeps its sent row.
+          _tx(
+            txidHex: 'bb',
+            blockTime: blockTime,
+            kind: 'sent',
+            displayPool: 'unknown',
+            displayAmount: BigInt.from(70000000),
+            fee: BigInt.from(10000),
+            amountIncludesFee: true,
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Net change'), findsNWidgets(2));
+    expect(find.text('-0.00065 ZEC'), findsOneWidget);
+    expect(find.text('Sent'), findsNothing);
+    expect(find.text('-0.7 ZEC'), findsOneWidget);
   });
 
   testWidgets('shows the empty state when history is empty', (tester) async {

@@ -23,7 +23,9 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/app_button.dart';
 import '../../../../core/widgets/app_icon.dart';
 import '../../../../core/widgets/app_toast.dart';
+import '../../../../core/widgets/app_tooltip.dart';
 import '../../../../providers/account_provider.dart';
+import '../../../../providers/enhance_pir_provider.dart';
 import '../../../../providers/voting/voting_home_entry_provider.dart';
 import '../../../../providers/voting/voting_home_cache_provider.dart';
 import '../../../../providers/voting/voting_config_source_provider.dart';
@@ -55,6 +57,7 @@ import '../../../migration/widgets/mobile/mobile_ironwood_migration_announcement
 import '../../../swap/models/swap_activity_navigation.dart';
 import '../../../swap/providers/swap_state_provider.dart';
 import '../../../swap/widgets/swap_activity_status_auto_refresh.dart';
+import '../../services/transparent_balance_display.dart';
 import '../../providers/backup_reminder_provider.dart';
 import '../../widgets/mobile_home_carousel.dart';
 import '../../services/transparent_shielding_service.dart';
@@ -868,6 +871,7 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
       row: buildTransactionActivityRow(
         context: context,
         transaction: transaction,
+        privateQueriesEnabled: ref.watch(enhancePirProvider),
         showPendingEstimate: !ref
             .watch(activityEtaExcludedTxidsProvider)
             .contains(activityTxidKey(transaction.txidHex)),
@@ -1040,10 +1044,10 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
               sync.saplingPendingBalance +
               sync.orchardPendingBalance +
               sync.ironwoodPendingBalance;
-    final transparentBalance =
-        sync.transparentBalance + sync.transparentPendingBalance;
+    final transparentBalance = TransparentBalanceDisplay.of(sync);
     final hasBalance =
-        shieldedBalance > BigInt.zero || transparentBalance > BigInt.zero;
+        shieldedBalance > BigInt.zero ||
+        (transparentBalance.amount ?? BigInt.zero) > BigInt.zero;
     final zecUsdUnitPrice = ref.watch(zecHomeUsdUnitPriceProvider);
     final fiatBalanceText = _mobileHomeFiatTextForZatoshi(
       shieldedBalance,
@@ -1154,10 +1158,12 @@ class _HomeContentState extends ConsumerState<_HomeContent> {
                     ).compactBalance.amountText,
               fiatBalanceText: shieldedFiatBalanceText,
               priceChange24hPct: priceChange24hPct,
-              transparentBalanceText: ZecAmount.fromZatoshi(
-                transparentBalance,
-              ).compactBalance.amountText,
-              hasTransparentBalance: transparentBalance > BigInt.zero,
+              transparentBalanceText: transparentBalance.text(
+                (amount) =>
+                    ZecAmount.fromZatoshi(amount).compactBalance.amountText,
+              ),
+              transparentBalanceHint: transparentBalance.hint,
+              hasTransparentBalance: transparentBalance.visible,
               canShieldBalance: sync.canShieldTransparentBalance,
               isShieldingBalance: _isShieldingBalance,
               privacyModeEnabled: privacyModeEnabled,
@@ -1727,6 +1733,7 @@ class _BalanceCard extends StatelessWidget {
     required this.fiatBalanceText,
     required this.priceChange24hPct,
     required this.transparentBalanceText,
+    this.transparentBalanceHint,
     required this.hasTransparentBalance,
     required this.canShieldBalance,
     required this.isShieldingBalance,
@@ -1742,6 +1749,9 @@ class _BalanceCard extends StatelessWidget {
   final String? fiatBalanceText;
   final double? priceChange24hPct;
   final String transparentBalanceText;
+
+  /// Why private transparent recovery stopped, shown on the transparent row.
+  final String? transparentBalanceHint;
   final bool hasTransparentBalance;
   final bool canShieldBalance;
   final bool isShieldingBalance;
@@ -1898,6 +1908,7 @@ class _BalanceCard extends StatelessWidget {
             _AnimatedMobileTransparentBalanceStrip(
               visible: hasTransparentBalance,
               balanceText: transparentBalanceText,
+              balanceHint: transparentBalanceHint,
               canShieldBalance: canShieldBalance,
               isShieldingBalance: isShieldingBalance,
               privacyModeEnabled: privacyModeEnabled,
@@ -1980,6 +1991,7 @@ class _AnimatedMobileTransparentBalanceStrip extends StatefulWidget {
   const _AnimatedMobileTransparentBalanceStrip({
     required this.visible,
     required this.balanceText,
+    this.balanceHint,
     required this.canShieldBalance,
     required this.isShieldingBalance,
     required this.privacyModeEnabled,
@@ -1988,6 +2000,7 @@ class _AnimatedMobileTransparentBalanceStrip extends StatefulWidget {
 
   final bool visible;
   final String balanceText;
+  final String? balanceHint;
   final bool canShieldBalance;
   final bool isShieldingBalance;
   final bool privacyModeEnabled;
@@ -2007,6 +2020,7 @@ class _AnimatedMobileTransparentBalanceStripState
   late final Animation<Offset> _offset;
 
   late String _balanceText;
+  String? _balanceHint;
   late bool _canShieldBalance;
   late bool _isShieldingBalance;
   late bool _privacyModeEnabled;
@@ -2072,6 +2086,7 @@ class _AnimatedMobileTransparentBalanceStripState
 
   void _cacheVisibleStrip() {
     _balanceText = widget.balanceText;
+    _balanceHint = widget.balanceHint;
     _canShieldBalance = widget.canShieldBalance;
     _isShieldingBalance = widget.isShieldingBalance;
     _privacyModeEnabled = widget.privacyModeEnabled;
@@ -2106,6 +2121,7 @@ class _AnimatedMobileTransparentBalanceStripState
               ignoring: !widget.visible,
               child: _MobileTransparentBalanceStrip(
                 balanceText: _balanceText,
+                balanceHint: _balanceHint,
                 canShieldBalance: _canShieldBalance,
                 isShieldingBalance: _isShieldingBalance,
                 privacyModeEnabled: _privacyModeEnabled,
@@ -2122,6 +2138,7 @@ class _AnimatedMobileTransparentBalanceStripState
 class _MobileTransparentBalanceStrip extends StatelessWidget {
   const _MobileTransparentBalanceStrip({
     required this.balanceText,
+    this.balanceHint,
     required this.canShieldBalance,
     required this.isShieldingBalance,
     required this.privacyModeEnabled,
@@ -2129,6 +2146,9 @@ class _MobileTransparentBalanceStrip extends StatelessWidget {
   });
 
   final String balanceText;
+
+  /// Why private recovery stopped, shown when the balance text is tapped.
+  final String? balanceHint;
   final bool canShieldBalance;
   final bool isShieldingBalance;
   final bool privacyModeEnabled;
@@ -2137,9 +2157,20 @@ class _MobileTransparentBalanceStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final hint = balanceHint;
     final displayedBalance = hideAmountIfPrivacyMode(
       '$balanceText $kZcashDefaultCurrencyTicker',
       privacyModeEnabled: privacyModeEnabled,
+    );
+    final balanceLabel = Text(
+      'Transparent: $displayedBalance',
+      key: const ValueKey('mobile_home_transparent_balance_text'),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: _mobileHomeLabelMStyle.copyWith(
+        color: colors.text.primary,
+        fontWeight: FontWeight.w500,
+      ),
     );
 
     return SizedBox(
@@ -2162,18 +2193,16 @@ class _MobileTransparentBalanceStrip extends StatelessWidget {
                   ),
                   const SizedBox(width: AppSpacing.xs),
                   Flexible(
-                    child: Text(
-                      'Transparent: $displayedBalance',
-                      key: const ValueKey(
-                        'mobile_home_transparent_balance_text',
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: _mobileHomeLabelMStyle.copyWith(
-                        color: colors.text.primary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+                    child: hint == null
+                        ? balanceLabel
+                        : AppTooltip(
+                            key: const ValueKey(
+                              'mobile_home_transparent_balance_hint',
+                            ),
+                            message: hint,
+                            tapToShow: true,
+                            child: balanceLabel,
+                          ),
                   ),
                 ],
               ),

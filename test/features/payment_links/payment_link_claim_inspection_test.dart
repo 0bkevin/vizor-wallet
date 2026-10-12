@@ -700,6 +700,9 @@ rust_sync.TransactionInfo _transaction({
   required int accountBalanceDelta,
 }) {
   return rust_sync.TransactionInfo(
+    detailsComplete: true,
+    feeState: rust_sync.TransactionFeeState.notApplicable,
+    provisional: false,
     txidHex: txid,
     minedHeight: BigInt.from(minedHeight),
     expiredUnmined: false,
@@ -711,6 +714,7 @@ rust_sync.TransactionInfo _transaction({
     displayAmount: BigInt.one,
     displayPool: 'shielded',
     createdTime: BigInt.zero,
+    amountIncludesFee: false,
   );
 }
 
@@ -902,7 +906,9 @@ class _InspectRustApi implements RustLibApi {
     required String network,
     required String accountUuid,
   }) async => rust_sync.WalletBalance(
+    transparentAuthority: rust_sync.TransparentBalanceAuthority.current,
     availability: rust_sync.WalletBalanceAvailability.available,
+    transparentPrivate: false,
     transparent: BigInt.zero,
     sapling: BigInt.zero,
     orchard: BigInt.zero,
