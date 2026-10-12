@@ -2838,8 +2838,48 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
     mobile: true,
   ),
   FigmaCompareScenario(
+    id: 'payment-request-scanned',
+    description: 'Desktop payment request replaced by the original QR',
+    builder: buildPaymentRequestScannedUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'mobile-payment-request-scanned',
+    description: 'Mobile payment request replaced by the original QR',
+    builder: buildMobilePaymentRequestScannedUseCase,
+    desktop: false,
+    mobile: true,
+  ),
+  FigmaCompareScenario(
+    id: 'payment-request-link-details',
+    description:
+        'Parsed external payment request before the final payment review',
+    builder: buildPaymentRequestLinkDetailsUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'mobile-payment-request-link-details',
+    description:
+        'Parsed external payment request before the final payment review',
+    builder: buildMobilePaymentRequestLinkDetailsUseCase,
+    desktop: false,
+    mobile: true,
+  ),
+  FigmaCompareScenario(
+    id: 'payment-request-review',
+    description:
+        'Final desktop payment review after the parsed details or a QR scan',
+    builder: buildPaymentRequestReviewUseCase,
+  ),
+  FigmaCompareScenario(
+    id: 'mobile-payment-request-review',
+    description:
+        'Final mobile payment review after the parsed details or a QR scan',
+    builder: buildMobilePaymentRequestReviewUseCase,
+    desktop: false,
+    mobile: true,
+  ),
+  FigmaCompareScenario(
     id: 'payment-request-full',
-    description: 'Desktop payment request card with label, message and note',
+    description: 'Desktop external-request introduction with a compact summary',
     builder: buildPaymentRequestFullUseCase,
   ),
   FigmaCompareScenario(
@@ -2938,7 +2978,7 @@ const figmaCompareScenarios = <FigmaCompareScenario>[
   ),
   FigmaCompareScenario(
     id: 'mobile-payment-request-full',
-    description: 'Mobile payment request sheet with label, message and note',
+    description: 'Mobile external-request introduction with a compact summary',
     builder: buildMobilePaymentRequestFullUseCase,
     desktop: false,
     mobile: true,
