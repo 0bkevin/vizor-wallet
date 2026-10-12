@@ -1,4 +1,4 @@
-use super::{SyncProgressEvent, TAIL_REPAIR_MAX_START_PERCENTAGE};
+use super::{SyncEventKind, SyncProgressEvent, TAIL_REPAIR_MAX_START_PERCENTAGE};
 
 /// Each attempt measures only its remaining scan work. Keep the completed
 /// portion of this sync session when a transient failure starts another attempt.
@@ -59,7 +59,7 @@ mod tests {
         let preparation =
             progress.report(preparation_progress_event(3_500_000, "chain_prepare", 0, 0));
         assert_eq!(preparation.percentage, before.percentage);
-        assert!(!preparation.is_complete);
+        assert_eq!(preparation.kind, SyncEventKind::Progress);
 
         // 100 blocks out of the remaining 10,000 finish after the retry.
         // The UI must advance from 46.36%, not stay there until 44% of
@@ -68,7 +68,7 @@ mod tests {
         assert!((after.percentage - 0.4456).abs() < 1e-12);
         assert!((after.display_target_percentage - 0.4512).abs() < 1e-12);
         assert_eq!(after.display_target_blocks, 100);
-        assert!(!after.is_complete);
+        assert_eq!(after.kind, SyncEventKind::Progress);
     }
 
     #[test]
@@ -92,7 +92,7 @@ mod tests {
         progress.start_attempt();
         let drained = progress.report(scan(1.0, 1.0));
         assert_eq!(drained.percentage, 1.0);
-        assert!(!drained.is_complete);
+        assert_eq!(drained.kind, SyncEventKind::Progress);
 
         // Repair scanning can fail after the original scan queue drained.
         progress.report(scan(0.95, 0.96));
@@ -107,18 +107,18 @@ mod tests {
             assert!(repair.percentage < repair.display_target_percentage);
             assert!(repair.display_target_percentage < 1.0);
             assert!(repair.is_syncing);
-            assert!(!repair.is_complete);
+            assert_eq!(repair.kind, SyncEventKind::Progress);
             previous_repair_percentage = repair.percentage;
         }
 
         let done = progress.report(SyncProgressEvent {
-            is_complete: true,
+            kind: SyncEventKind::Completed,
             is_syncing: false,
             ..scan(1.0, 1.0)
         });
         assert_eq!(done.percentage, 1.0);
         assert_eq!(done.display_target_percentage, 1.0);
-        assert!(done.is_complete);
+        assert_eq!(done.kind, SyncEventKind::Completed);
         assert!(!done.is_syncing);
     }
 
@@ -129,14 +129,14 @@ mod tests {
         progress.start_attempt();
         let scanned = progress.report(scan(1.0, 1.0));
         assert_eq!(scanned.percentage, 1.0);
-        assert!(!scanned.is_complete);
+        assert_eq!(scanned.kind, SyncEventKind::Progress);
         let done = progress.report(SyncProgressEvent {
-            is_complete: true,
+            kind: SyncEventKind::Completed,
             is_syncing: false,
             ..scan(1.0, 1.0)
         });
         assert_eq!(done.percentage, 1.0);
-        assert!(done.is_complete);
+        assert_eq!(done.kind, SyncEventKind::Completed);
         assert!(!done.is_syncing);
     }
 }

@@ -17,6 +17,7 @@ import 'package:zcash_wallet/src/features/keystone/widgets/keystone_signing_moda
 import 'package:zcash_wallet/src/features/payment_links/models/vizor_payment_link.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_cards_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_intake_provider.dart';
+import 'package:zcash_wallet/src/features/payment_links/providers/payment_link_claim_coordinator_provider.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_entry_policy.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_hardware_signing_service.dart';
 import 'package:zcash_wallet/src/features/payment_links/services/payment_link_received_store.dart';
@@ -41,6 +42,37 @@ import '../../support/leading_decimal_input.dart';
 import '../../support/payment_links_screen_support.dart';
 
 void main() {
+  testWidgets(
+    'leaving a desktop preview prevents its interrupted check reopening',
+    (tester) async {
+      final gate = Completer<void>();
+      final operations = _InterruptedPreviewOperations(gate);
+      await pumpPaymentLinksScreen(
+        tester,
+        operations: operations,
+        clipboard: FakePaymentLinkClipboard(
+          text: incomingLink.toUri().toString(),
+        ),
+      );
+      await tester.tap(find.text('Redeem a card'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Paste card link'));
+      await tester.pump();
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(MaterialApp).first),
+      );
+      final coordinator = container.read(paymentLinkClaimCoordinatorProvider);
+      coordinator.pauseForLifecycle();
+      await tester.tap(find.text('My Cards'));
+      await tester.pumpAndSettle();
+      coordinator.resumeForLifecycle();
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(operations.allowLongSyncCalls, hasLength(1));
+      expect(find.text('Redeem a card'), findsOneWidget);
+      expect(find.text('You’ve received\na gift card!'), findsNothing);
+    },
+  );
   registerGiftCardPrivacyChecks(mobile: false);
   registerGiftCardClaimCheckingChecks(mobile: false);
   testWidgets(
@@ -2995,6 +3027,83 @@ void main() {
     expect(operations.discardedClaimAddresses, isEmpty);
   });
 
+  for (final status in [
+    PaymentLinkReceivedStatus.submitting,
+    PaymentLinkReceivedStatus.receiving,
+  ]) {
+    for (final queuedTogether in [false, true]) {
+      testWidgets(
+        'opens the next Gift Card after an in-flight duplicate '
+        '(${status.name}, ${queuedTogether ? 'queued together' : 'arrives later'})',
+        (tester) async {
+          final operations = FakePaymentLinkOperations(
+            receivedRecords: [
+              PaymentLinkReceivedRecord(
+                claimSubmittedAt: DateTime.utc(2026, 8, 28),
+                network: incomingLink.network,
+                address: incomingLink.address,
+                amountZatoshi: incomingLink.amountZatoshi,
+                createdAt: incomingLink.createdAt,
+                artworkId: incomingLink.presentation?.artworkId,
+                message: incomingLink.presentation?.message,
+                status: status,
+                claimLink: incomingLink,
+                destinationAccountUuid: 'account-1',
+                claimTxids: status == PaymentLinkReceivedStatus.receiving
+                    ? 'existing-claim-tx'
+                    : null,
+                updatedAt: DateTime.utc(2026, 8, 28),
+              ),
+            ],
+          );
+          await pumpPaymentLinksScreen(
+            tester,
+            operations: operations,
+            bootstrap: homeBootstrap,
+          );
+          final container = ProviderScope.containerOf(
+            tester.element(find.byType(MaterialApp)),
+          );
+          final intake = container.read(paymentLinkIntakeProvider.notifier);
+
+          expect(
+            intake.receive(incomingLink.toUri().toString()),
+            PaymentLinkIntakeResult.accepted,
+          );
+          if (!queuedTogether) {
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 500));
+            await tester.pump();
+            expect(operations.preparedLinks, isEmpty);
+          }
+          expect(
+            intake.receive(secondIncomingLink.toUri().toString()),
+            PaymentLinkIntakeResult.accepted,
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+
+          expect(operations.preparedLinks, hasLength(1));
+          expect(
+            operations.preparedLinks.single.hasSameCanonicalPayload(
+              secondIncomingLink,
+            ),
+            isTrue,
+          );
+          expect(
+            container.read(paymentLinkIntakeProvider).pendingLinks,
+            isEmpty,
+          );
+          expect(operations.discardedClaimAddresses, isEmpty);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
   testWidgets(
     'loads Created and Received in parallel before consuming an incoming link',
     (tester) async {
@@ -4059,6 +4168,28 @@ void main() {
       findsOneWidget,
     );
   });
+}
+
+class _InterruptedPreviewOperations extends FakePaymentLinkOperations {
+  _InterruptedPreviewOperations(Completer<void> gate)
+    : super(prepareClaimGates: {1: gate});
+
+  @override
+  Future<PaymentLinkClaimSession> prepareClaim(
+    VizorPaymentLink link, {
+    bool allowLongSync = false,
+  }) async {
+    final session = await super.prepareClaim(
+      link,
+      allowLongSync: allowLongSync,
+    );
+    if (allowLongSyncCalls.length == 1) {
+      throw GiftCardPreparationInterrupted(
+        GiftCardPreparationPauseReason.lifecycle,
+      );
+    }
+    return session;
+  }
 }
 
 Future<void> _reviewTwoCards(WidgetTester tester) async {

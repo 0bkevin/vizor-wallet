@@ -25,8 +25,10 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_icon.dart';
 import '../../../core/widgets/app_pane_modal_overlay.dart';
+import '../../../core/widgets/app_tooltip.dart';
 import '../../../providers/zec_price_change_provider.dart';
 import '../../../providers/account_provider.dart';
+import '../../../providers/enhance_pir_provider.dart';
 import '../../../providers/privacy_mode_provider.dart';
 import '../../../providers/sync_display_progress_provider.dart';
 import '../../../providers/network_privacy_provider.dart';
@@ -49,6 +51,7 @@ import '../../swap/models/swap_fiat_value_formatting.dart';
 import '../../swap/providers/swap_activity_tracker.dart';
 import '../widgets/desktop_home_setup_carousel.dart';
 import '../../swap/providers/swap_state_provider.dart';
+import '../services/transparent_balance_display.dart';
 import '../services/transparent_shielding_service.dart';
 import '../widgets/keystone_shield_signing_overlay.dart';
 import '../widgets/ledger_shield_signing_overlay.dart';
@@ -313,8 +316,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       privacyModeEnabled: privacyModeEnabled,
     );
     final priceChange24hPct = ref.watch(zecPriceChange24hPctProvider);
-    final transparentBalance =
-        sync.transparentBalance + sync.transparentPendingBalance;
+    final transparentBalance = TransparentBalanceDisplay.of(sync);
     final canShieldTransparentBalance =
         sync.canShieldTransparentBalance && !isMigrationRequired;
     final isImportingForBackground =
@@ -392,8 +394,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 migratingBalanceText: formatZecAmount(migratingBalance),
                 waitingForMigrationConfirmation:
                     waitingForMigrationConfirmation,
-                transparentBalanceText: _formatZec(transparentBalance),
-                hasTransparentBalance: transparentBalance > BigInt.zero,
+                transparentBalanceText: transparentBalance.text(_formatZec),
+                transparentBalanceHint: transparentBalance.hint,
+                hasTransparentBalance: transparentBalance.visible,
                 canShieldBalance: canShieldTransparentBalance,
                 isShieldingBalance: _isShieldingBalance,
                 shieldBalanceError: _shieldBalanceError,
@@ -464,6 +467,7 @@ class _HomePane extends ConsumerStatefulWidget {
     required this.migratingBalanceText,
     required this.waitingForMigrationConfirmation,
     required this.transparentBalanceText,
+    this.transparentBalanceHint,
     required this.hasTransparentBalance,
     required this.canShieldBalance,
     required this.isShieldingBalance,
@@ -489,6 +493,9 @@ class _HomePane extends ConsumerStatefulWidget {
   final String migratingBalanceText;
   final bool waitingForMigrationConfirmation;
   final String transparentBalanceText;
+
+  /// Why private transparent recovery stopped, shown on the transparent row.
+  final String? transparentBalanceHint;
   final bool hasTransparentBalance;
   final bool canShieldBalance;
   final bool isShieldingBalance;
@@ -637,6 +644,7 @@ class _HomePaneState extends ConsumerState<_HomePane> {
       migratingBalanceText: widget.migratingBalanceText,
       waitingForMigrationConfirmation: widget.waitingForMigrationConfirmation,
       transparentBalanceText: widget.transparentBalanceText,
+      transparentBalanceHint: widget.transparentBalanceHint,
       hasTransparentBalance: widget.hasTransparentBalance,
       canShieldBalance: widget.canShieldBalance,
       isShieldingBalance: widget.isShieldingBalance,
@@ -759,6 +767,7 @@ class _HomePaneState extends ConsumerState<_HomePane> {
       row: buildTransactionActivityRow(
         context: context,
         transaction: transaction,
+        privateQueriesEnabled: ref.watch(enhancePirProvider),
         showPendingEstimate: !ref
             .watch(activityEtaExcludedTxidsProvider)
             .contains(activityTxidKey(transaction.txidHex)),
@@ -852,9 +861,19 @@ int _compareHomeActivityEntries(_HomeActivityEntry a, _HomeActivityEntry b) {
   return bTime.compareTo(aTime);
 }
 
+/// Offers [hint] as [child]'s tooltip, when there is one.
+Widget _withHint(String? hint, Widget child) => hint == null
+    ? child
+    : AppTooltip(
+        key: const ValueKey('home_transparent_balance_hint'),
+        message: hint,
+        child: child,
+      );
+
 class _HomeTransparentBalanceStrip extends StatelessWidget {
   const _HomeTransparentBalanceStrip({
     required this.balanceText,
+    this.balanceHint,
     required this.canShieldBalance,
     required this.showShieldBalanceAction,
     required this.isShieldingBalance,
@@ -867,6 +886,9 @@ class _HomeTransparentBalanceStrip extends StatelessWidget {
   });
 
   final String balanceText;
+
+  /// Why private recovery stopped, offered as the balance text's tooltip.
+  final String? balanceHint;
   final bool canShieldBalance;
   final bool showShieldBalanceAction;
   final bool isShieldingBalance;
@@ -908,14 +930,17 @@ class _HomeTransparentBalanceStrip extends StatelessWidget {
                   ),
                   const SizedBox(width: AppSpacing.xs),
                   Flexible(
-                    child: Text(
-                      'Transparent: $displayedBalance',
-                      key: const ValueKey('home_transparent_balance_text'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.labelLarge.copyWith(
-                        color: colors.text.primary,
-                        fontWeight: FontWeight.w400,
+                    child: _withHint(
+                      balanceHint,
+                      Text(
+                        'Transparent: $displayedBalance',
+                        key: const ValueKey('home_transparent_balance_text'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.labelLarge.copyWith(
+                          color: colors.text.primary,
+                          fontWeight: FontWeight.w400,
+                        ),
                       ),
                     ),
                   ),
@@ -1155,6 +1180,7 @@ class _HomeDesktopPane extends StatelessWidget {
     required this.migratingBalanceText,
     required this.waitingForMigrationConfirmation,
     required this.transparentBalanceText,
+    this.transparentBalanceHint,
     required this.hasTransparentBalance,
     required this.canShieldBalance,
     required this.isShieldingBalance,
@@ -1184,6 +1210,9 @@ class _HomeDesktopPane extends StatelessWidget {
   final String migratingBalanceText;
   final bool waitingForMigrationConfirmation;
   final String transparentBalanceText;
+
+  /// Why private transparent recovery stopped, shown on the transparent row.
+  final String? transparentBalanceHint;
   final bool hasTransparentBalance;
   final bool canShieldBalance;
   final bool isShieldingBalance;
@@ -1244,6 +1273,7 @@ class _HomeDesktopPane extends StatelessWidget {
                       waitingForMigrationConfirmation:
                           waitingForMigrationConfirmation,
                       transparentBalanceText: transparentBalanceText,
+                      transparentBalanceHint: transparentBalanceHint,
                       hasTransparentBalance: hasTransparentBalance,
                       canShieldBalance: canShieldBalance,
                       isShieldingBalance: isShieldingBalance,
@@ -1467,6 +1497,7 @@ class _HomeDesktopBalanceCard extends StatefulWidget {
     required this.migratingBalanceText,
     required this.waitingForMigrationConfirmation,
     required this.transparentBalanceText,
+    this.transparentBalanceHint,
     required this.hasTransparentBalance,
     required this.canShieldBalance,
     required this.isShieldingBalance,
@@ -1489,6 +1520,9 @@ class _HomeDesktopBalanceCard extends StatefulWidget {
   final String migratingBalanceText;
   final bool waitingForMigrationConfirmation;
   final String transparentBalanceText;
+
+  /// Why private transparent recovery stopped, shown on the transparent row.
+  final String? transparentBalanceHint;
   final bool hasTransparentBalance;
   final bool canShieldBalance;
   final bool isShieldingBalance;
@@ -1726,6 +1760,7 @@ class _HomeDesktopBalanceCardState extends State<_HomeDesktopBalanceCard> {
                         'home_desktop_transparent_balance_strip',
                       ),
                       balanceText: widget.transparentBalanceText,
+                      balanceHint: widget.transparentBalanceHint,
                       canShieldBalance: widget.canShieldBalance,
                       showShieldBalanceAction:
                           migrationRequired ||

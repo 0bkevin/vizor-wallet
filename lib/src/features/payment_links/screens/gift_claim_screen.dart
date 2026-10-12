@@ -179,18 +179,10 @@ class _GiftClaimScreenState extends ConsumerState<GiftClaimScreen> {
     try {
       await ref.read(giftClaimFlowProvider.notifier).cancelSetupReturn();
       if (!mounted) return;
-      if (ref.read(accountProvider).value?.hasAccounts == true) {
-        final inspection = ref.read(giftClaimFlowProvider)?.inspection;
-        if (inspection == null) return;
-        ref.read(giftClaimFlowProvider.notifier).beginWalletSetup(inspection);
-        context.push('/gift/customise');
-      } else {
-        context.push(
-          kAppFormFactor == AppFormFactor.mobile
-              ? '/gift/passcode'
-              : '/gift/set-password',
-        );
-      }
+      final inspection = ref.read(giftClaimFlowProvider)?.inspection;
+      if (inspection == null) return;
+      ref.read(giftClaimFlowProvider.notifier).beginWalletSetup(inspection);
+      context.push('/gift/customise');
     } catch (_) {
       if (mounted) {
         showAppToast(
@@ -929,6 +921,11 @@ class _GiftClaimStatus extends StatelessWidget {
         );
       case GiftClaimPhase.failed:
         return switch (flow.failure) {
+          GiftClaimFailure.interrupted => (
+            kPaymentLinkInterruptedCheckMessage,
+            null,
+            _Tone.problem,
+          ),
           GiftClaimFailure.otherNetwork => (
             'This gift card is for a different network.',
             null,
@@ -1029,7 +1026,8 @@ class _GiftClaimActions extends ConsumerWidget {
               ]
             : [],
       GiftClaimPhase.failed =>
-        flow.failure == GiftClaimFailure.network
+        flow.failure == GiftClaimFailure.network ||
+                flow.failure == GiftClaimFailure.interrupted
             ? [_primary('Try again', notifier.recheck)]
             : [_secondary('Go back', onClose)],
       GiftClaimPhase.inspected when canClaimLater => [

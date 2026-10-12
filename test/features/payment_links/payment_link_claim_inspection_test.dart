@@ -154,6 +154,31 @@ void main() {
     }
 
     test(
+      'fast resume waits for interrupted native work and wallet cleanup',
+      () async {
+        api.checkGate = Completer<void>();
+        final checking = service.inspectClaim(_link());
+        final failure = expectLater(
+          checking,
+          throwsA(isA<GiftCardPreparationInterrupted>()),
+        );
+        await api.checkStarted.future;
+        final coordinator = container.read(paymentLinkClaimCoordinatorProvider);
+        coordinator.pauseForLifecycle();
+        coordinator.resumeForLifecycle();
+        expect(coordinator.canStartPreparation, isFalse);
+        await expectLater(service.inspectClaim(_link()), throwsStateError);
+        api.checkGate!.complete();
+        await failure;
+        await pumpEventQueue();
+        expect(coordinator.canStartPreparation, isTrue);
+        final inspection = await service.inspectClaim(_link());
+        expect(inspection.claimableZatoshi, _link().amountZatoshi);
+        expect(api.cancelCalls, greaterThan(0));
+      },
+    );
+
+    test(
       'background admission stays closed after account recovery wakeups',
       () async {
         final coordinator = container.read(paymentLinkClaimCoordinatorProvider);
@@ -700,6 +725,9 @@ rust_sync.TransactionInfo _transaction({
   required int accountBalanceDelta,
 }) {
   return rust_sync.TransactionInfo(
+    detailsComplete: true,
+    feeState: rust_sync.TransactionFeeState.notApplicable,
+    provisional: false,
     txidHex: txid,
     minedHeight: BigInt.from(minedHeight),
     expiredUnmined: false,
@@ -711,6 +739,7 @@ rust_sync.TransactionInfo _transaction({
     displayAmount: BigInt.one,
     displayPool: 'shielded',
     createdTime: BigInt.zero,
+    amountIncludesFee: false,
   );
 }
 
@@ -902,7 +931,9 @@ class _InspectRustApi implements RustLibApi {
     required String network,
     required String accountUuid,
   }) async => rust_sync.WalletBalance(
+    transparentAuthority: rust_sync.TransparentBalanceAuthority.current,
     availability: rust_sync.WalletBalanceAvailability.available,
+    transparentPrivate: false,
     transparent: BigInt.zero,
     sapling: BigInt.zero,
     orchard: BigInt.zero,

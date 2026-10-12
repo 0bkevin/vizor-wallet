@@ -44,6 +44,9 @@ void main() {
             expectedAmountZatoshi: BigInt.one,
             details: [
               rust_sync.TransactionDetail(
+                transparentOmissions: const [],
+                detailsComplete: true,
+                provisional: false,
                 txidHex: 'a',
                 txKind: 'sent',
                 outputs: [
@@ -55,6 +58,7 @@ void main() {
                     usesOrchardReceiver: exactPool != 'sapling',
                   ),
                 ],
+                transparentRecipients: const [],
               ),
             ],
           ),
@@ -72,6 +76,9 @@ void main() {
         expectedAmountZatoshi: BigInt.from(100),
         details: [
           rust_sync.TransactionDetail(
+            transparentOmissions: const [],
+            detailsComplete: true,
+            provisional: false,
             txidHex: 'a',
             txKind: 'sent',
             outputs: [
@@ -84,6 +91,7 @@ void main() {
                   usesOrchardReceiver: pool == 'orchard',
                 ),
             ],
+            transparentRecipients: const [],
           ),
         ],
       ),
@@ -100,6 +108,9 @@ void main() {
         details: [
           for (final (txid, pool) in [('a', 'orchard'), ('b', null)])
             rust_sync.TransactionDetail(
+              transparentOmissions: const [],
+              detailsComplete: true,
+              provisional: false,
               txidHex: txid,
               txKind: 'sent',
               outputs: [
@@ -111,6 +122,7 @@ void main() {
                   usesOrchardReceiver: true,
                 ),
               ],
+              transparentRecipients: const [],
             ),
         ],
       ),
@@ -379,7 +391,10 @@ void main() {
         claimTxids: displayTxid,
         details: [
           rust_sync.TransactionDetail(
+            transparentOmissions: const [],
             txidHex: storageTxid,
+            detailsComplete: true,
+            provisional: false,
             txKind: 'sent',
             sourcePool: 'shielded',
             outputs: [
@@ -396,6 +411,7 @@ void main() {
                 pool: 'ironwood',
               ),
             ],
+            transparentRecipients: const [],
           ),
         ],
         destinationAddress: 'destination-ua',
@@ -431,7 +447,10 @@ void main() {
         String pool, {
         String address = 'destination',
       }) => rust_sync.TransactionDetail(
+        transparentOmissions: const [],
         txidHex: txid,
+        detailsComplete: true,
+        provisional: false,
         txKind: 'sent',
         outputs: [
           rust_sync.TransactionDetailOutput(
@@ -441,6 +460,7 @@ void main() {
             pool: pool,
           ),
         ],
+        transparentRecipients: const [],
       );
       String? pool(List<rust_sync.TransactionDetail> details) =>
           paymentLinkClaimDestinationPoolFromDetails(
@@ -500,7 +520,10 @@ void main() {
           claimTxids: 'claim',
           details: [
             rust_sync.TransactionDetail(
+              transparentOmissions: const [],
               txidHex: 'claim',
+              detailsComplete: true,
+              provisional: false,
               txKind: 'sent',
               outputs: [
                 rust_sync.TransactionDetailOutput(
@@ -510,6 +533,7 @@ void main() {
                   usesOrchardReceiver: usesOrchard,
                 ),
               ],
+              transparentRecipients: const [],
             ),
           ],
           destinationAddress: projection,
@@ -1638,6 +1662,10 @@ void main() {
           api.poolFixture = true;
           api.recipientHistory = [
             rust_sync.TransactionInfo(
+              amountIncludesFee: false,
+              detailsComplete: true,
+              provisional: false,
+              feeState: rust_sync.TransactionFeeState.notApplicable,
               txidHex: 'a',
               minedHeight: BigInt.from(100),
               expiredUnmined: false,
@@ -3091,6 +3119,10 @@ rust_sync.TransactionInfo _transaction({
     expiredUnmined: expiredUnmined,
     accountBalanceDelta: accountBalanceDelta,
     fee: BigInt.zero,
+    feeState: rust_sync.TransactionFeeState.notApplicable,
+    detailsComplete: true,
+    provisional: false,
+    amountIncludesFee: false,
     blockTime: BigInt.from(blockTime),
     isTransparent: false,
     txKind: txKind,
@@ -3160,7 +3192,9 @@ class _ClaimDestinationRustApi implements RustLibApi {
     required String network,
     required String accountUuid,
   }) async => rust_sync.WalletBalance(
+    transparentAuthority: rust_sync.TransparentBalanceAuthority.current,
     availability: rust_sync.WalletBalanceAvailability.available,
+    transparentPrivate: false,
     transparent: BigInt.zero,
     sapling: BigInt.zero,
     orchard: BigInt.zero,
@@ -3307,7 +3341,10 @@ class _ClaimDestinationRustApi implements RustLibApi {
       throw StateError('Detail unavailable');
     }
     return rust_sync.TransactionDetail(
+      transparentOmissions: const [],
       txidHex: txidHex,
+      detailsComplete: true,
+      provisional: false,
       txKind: txKind,
       outputs: [
         rust_sync.TransactionDetailOutput(
@@ -3318,6 +3355,7 @@ class _ClaimDestinationRustApi implements RustLibApi {
           activityPool: detailActivityPool,
         ),
       ],
+      transparentRecipients: const [],
     );
   }
 

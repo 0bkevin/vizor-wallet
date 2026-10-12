@@ -362,6 +362,10 @@ void main() {
         displayAmount: _link.amountZatoshi,
         displayPool: 'orchard',
         createdTime: pending.createdTime,
+        feeState: rust_sync.TransactionFeeState.notApplicable,
+        detailsComplete: true,
+        provisional: false,
+        amountIncludesFee: false,
       );
       expect(confirmedIndex.withPendingClaims([detected]), [detected]);
       expect(

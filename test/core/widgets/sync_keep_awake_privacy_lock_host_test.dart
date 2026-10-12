@@ -192,6 +192,8 @@ void main() {
           _sync(
             scannedHeight: 100,
             chainTipHeight: 102,
+            remainingScanBlocks: 2,
+            pendingScanStartHeight: 101,
             lastSyncStartedAt: DateTime(2026, 7, 9, 12),
           ),
         ),
@@ -209,6 +211,7 @@ void main() {
     _setMobileViewport(tester);
     await tester.pumpWidget(
       _app(
+        child: _themedApp(idleTimeout: const Duration(minutes: 1)),
         syncNotifier: FakeSyncNotifier(
           _sync(lastSyncStartedAt: DateTime(2026, 7, 9, 12)),
         ),
@@ -216,15 +219,15 @@ void main() {
     );
     await _settleInitialSync(tester);
 
-    await tester.pump(const Duration(milliseconds: 30));
+    await tester.pump(const Duration(seconds: 30));
     await tester.tap(find.byKey(const ValueKey('home_surface')));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 30));
+    await tester.pump(const Duration(seconds: 30));
     await tester.pump();
 
     expect(find.text('Vizor is syncing'), findsNothing);
 
-    await tester.pump(const Duration(milliseconds: 30));
+    await tester.pump(const Duration(seconds: 31));
     await tester.pump();
 
     expect(find.text('Vizor is syncing'), findsOneWidget);
@@ -642,6 +645,8 @@ void main() {
         percentage: 0,
         scannedHeight: 200,
         chainTipHeight: 202,
+        remainingScanBlocks: 2,
+        pendingScanStartHeight: 201,
         lastSyncStartedAt: DateTime(2026, 7, 9, 12, 2),
       ),
     );
@@ -969,11 +974,11 @@ Widget _privacyScreenApp({
   );
 }
 
-Widget _themedApp() {
+Widget _themedApp({Duration idleTimeout = const Duration(milliseconds: 50)}) {
   return MaterialApp(
     builder: (_, child) => AppTheme(data: AppThemeData.dark, child: child!),
     home: SyncKeepAwakePrivacyLockHost(
-      idleTimeout: const Duration(milliseconds: 50),
+      idleTimeout: idleTimeout,
       child: SyncKeepAwakeInteractionListener(
         child: Scaffold(
           body: GestureDetector(
@@ -1033,6 +1038,8 @@ SyncState _sync({
   int scannedHeight = 100,
   int chainTipHeight = 200,
   DateTime? lastSyncStartedAt,
+  int? remainingScanBlocks,
+  int? pendingScanStartHeight,
 }) {
   return SyncState(
     isSyncing: isSyncing,
@@ -1040,6 +1047,8 @@ SyncState _sync({
     percentage: percentage,
     scannedHeight: scannedHeight,
     chainTipHeight: chainTipHeight,
+    remainingScanBlocks: remainingScanBlocks,
+    pendingScanStartHeight: pendingScanStartHeight,
     lastSyncStartedAt: lastSyncStartedAt,
   );
 }

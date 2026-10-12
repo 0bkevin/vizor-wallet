@@ -9,6 +9,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `api_proposal_result`, `catch`, `enhance_pir_enabled`, `fetch_block_time`, `migration_status_from_balance`, `parse_network_and_migrate`, `payment_link_batch_pairs`, `run_full_sync_internal`, `to_wallet_action_sigs`, `to_wallet_migration_schedule`, `to_wallet_signed_messages`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MempoolObserverState`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`
 
 /// Set the desired sync mode. 0=none, 1=foreground, 2=background.
 /// The running sync loop checks this each batch and exits if mismatched.
@@ -26,6 +27,47 @@ void setActiveSyncAccount({String? accountUuid}) => RustLib.instance.api
 /// Enable private Ironwood transaction enhancement for future sync work.
 void setEnhancePirEnabled({required bool enabled}) =>
     RustLib.instance.api.crateApiSyncSetEnhancePirEnabled(enabled: enabled);
+
+/// Record whether the private queries setting in effect was read from
+/// storage. An unreadable setting is private for the launch but unconfirmed:
+/// it withholds public transparent lookups and never raises a wallet's
+/// transparent policy.
+void setEnhancePirPreferenceConfirmed({required bool confirmed}) => RustLib
+    .instance
+    .api
+    .crateApiSyncSetEnhancePirPreferenceConfirmed(confirmed: confirmed);
+
+/// Reconcile the wallet's durable transparent policy with the private queries
+/// setting. `true` raises it to private recovery when this build selects that
+/// mode; `false` lowers it to public in every build. Returns the wallet's
+/// resulting durable policy, mode and generation, whether this call changed it
+/// or found it already so (another connection may have changed it meanwhile),
+/// so the caller always adopts what holds now; `None` only when there is no
+/// wallet. Waits up to 30 s for public lookups already in flight, and changes
+/// nothing on failure. A missing wallet is left alone and never created. It
+/// never confirms the setting: callers do that only for a value read from
+/// storage.
+Future<ApiAppliedTransparentPolicy?> reconcileTransparentPolicy({
+  required String dbPath,
+  required String network,
+  required bool privateQueries,
+}) => RustLib.instance.api.crateApiSyncReconcileTransparentPolicy(
+  dbPath: dbPath,
+  network: network,
+  privateQueries: privateQueries,
+);
+
+/// The wallet's durable transparent policy, read without changing or creating
+/// anything; `None` when there is no wallet. Startup uses it to show a saved
+/// `false` on a wallet that still requires private recovery as the
+/// unfinished opt-out it is, so one toggle governs both.
+Future<ApiAppliedTransparentPolicy?> readTransparentPolicy({
+  required String dbPath,
+  required String network,
+}) => RustLib.instance.api.crateApiSyncReadTransparentPolicy(
+  dbPath: dbPath,
+  network: network,
+);
 
 /// Start a full sync. Streams progress events to Dart via StreamSink.
 /// mode: 1=foreground, 2=background. Sync exits if desired mode changes.
@@ -1037,6 +1079,67 @@ Future<TransactionDetail> getTransactionDetail({
   txKind: txKind,
 );
 
+/// Serves `txid_hex` (as [`TransactionInfo::txid_hex`]) first in the next
+/// transparent txid enhancement run for the wallet at `db_path`. A detail
+/// view calls it on open while the details are pending or unavailable.
+void prioritizeTransparentDetails({
+  required String dbPath,
+  required String txidHex,
+}) => RustLib.instance.api.crateApiSyncPrioritizeTransparentDetails(
+  dbPath: dbPath,
+  txidHex: txidHex,
+);
+
+/// Loads one transaction's full details from lightwalletd because the user
+/// asked to, then stores them as any enhancement payload. This reveals the
+/// transaction (`txid_hex`, as [`TransactionInfo::txid_hex`]) to the server,
+/// so the app calls it only from an explicit, disclosed user action, never
+/// automatically, and it runs whatever the transparent policy is. Rust sends
+/// nothing unless `account_uuid` holds a transparent part of the transaction.
+/// `cancel_epoch` is [`public_transaction_load_epoch`] read when the user's
+/// load began: a [`cancel_public_transaction_loads`] since then stops the load
+/// before it opens the wallet, even one made before this call reached Rust.
+Future<void> enhanceTransactionPublicly({
+  required String dbPath,
+  required String network,
+  required String lightwalletdUrl,
+  required String accountUuid,
+  required String txidHex,
+  required BigInt cancelEpoch,
+}) => RustLib.instance.api.crateApiSyncEnhanceTransactionPublicly(
+  dbPath: dbPath,
+  network: network,
+  lightwalletdUrl: lightwalletdUrl,
+  accountUuid: accountUuid,
+  txidHex: txidHex,
+  cancelEpoch: cancelEpoch,
+);
+
+/// The cancellation epoch for a public load beginning now, to pass to
+/// [`enhance_transaction_publicly`]. Read synchronously when the load
+/// registers, before any asynchronous step.
+BigInt publicTransactionLoadEpoch() =>
+    RustLib.instance.api.crateApiSyncPublicTransactionLoadEpoch();
+
+/// Cancels every [`enhance_transaction_publicly`] in flight: one still
+/// connecting sends nothing, and none stores what it receives. The app calls
+/// it on lock and before deleting an account or the wallet.
+void cancelPublicTransactionLoads() =>
+    RustLib.instance.api.crateApiSyncCancelPublicTransactionLoads();
+
+/// Debug builds only: one
+/// private txid display lookup of `txid_hex` (as [`TransactionInfo::txid_hex`])
+/// mined at `mined_height`, on mainnet, persisting nothing.
+Future<TransparentDetailsLookup> debugLookupTransparentDetails({
+  required String network,
+  required String txidHex,
+  required BigInt minedHeight,
+}) => RustLib.instance.api.crateApiSyncDebugLookupTransparentDetails(
+  network: network,
+  txidHex: txidHex,
+  minedHeight: minedHeight,
+);
+
 String getBlocksDir({required String cachePath}) =>
     RustLib.instance.api.crateApiSyncGetBlocksDir(cachePath: cachePath);
 
@@ -1281,6 +1384,31 @@ class AddressValidationResult {
           wrongNetwork == other.wrongNetwork;
 }
 
+/// The durable transparent policy a reconciliation applied.
+class ApiAppliedTransparentPolicy {
+  final ApiTransparentLedgerMode mode;
+
+  /// Advances on every mode transition. Anything read under an earlier
+  /// generation was authorized by a policy that no longer holds.
+  final BigInt generation;
+
+  const ApiAppliedTransparentPolicy({
+    required this.mode,
+    required this.generation,
+  });
+
+  @override
+  int get hashCode => mode.hashCode ^ generation.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ApiAppliedTransparentPolicy &&
+          runtimeType == other.runtimeType &&
+          mode == other.mode &&
+          generation == other.generation;
+}
+
 /// Independent single-funding Gift Card preparation / post-submit observation.
 class ApiGiftCardCheckProgress {
   final String phase;
@@ -1370,8 +1498,25 @@ class ApiMempoolTxEvent {
           matched == other.matched;
 }
 
+/// What an [`ApiSyncProgressEvent`] reports.
+enum ApiSyncEventKind {
+  /// The sync is still running.
+  progress,
+
+  /// The sync completed. Also re-reported after the deferred
+  /// inactive-account refresh or the ephemeral address checks change
+  /// wallet data.
+  completed,
+
+  /// A post-sync follow-up changed wallet data after completion: re-read
+  /// balances, history, and open receipts. The sync stays complete, and
+  /// its stream stays open until every follow-up ends.
+  followupUpdated,
+}
+
 /// Progress event streamed to Dart during sync.
 class ApiSyncProgressEvent {
+  final ApiSyncEventKind kind;
   final BigInt scannedHeight;
   final BigInt chainTipHeight;
   final double percentage;
@@ -1380,8 +1525,13 @@ class ApiSyncProgressEvent {
   /// advances at most `display_target_blocks` virtual blocks to this target.
   final double displayTargetPercentage;
   final BigInt displayTargetBlocks;
+
+  /// Total pending scan blocks. None before queue discovery, Some(0) if empty.
+  final BigInt? remainingScanBlocks;
+
+  /// Inclusive start of the earliest pending scan range, regardless of priority.
+  final BigInt? pendingScanStartHeight;
   final bool isSyncing;
-  final bool isComplete;
   final bool hasNewTx;
 
   /// Completed and total work units for measurable preparation phases.
@@ -1393,13 +1543,15 @@ class ApiSyncProgressEvent {
   final String phase;
 
   const ApiSyncProgressEvent({
+    required this.kind,
     required this.scannedHeight,
     required this.chainTipHeight,
     required this.percentage,
     required this.displayTargetPercentage,
     required this.displayTargetBlocks,
+    this.remainingScanBlocks,
+    this.pendingScanStartHeight,
     required this.isSyncing,
-    required this.isComplete,
     required this.hasNewTx,
     required this.phaseCompletedUnits,
     required this.phaseTotalUnits,
@@ -1408,13 +1560,15 @@ class ApiSyncProgressEvent {
 
   @override
   int get hashCode =>
+      kind.hashCode ^
       scannedHeight.hashCode ^
       chainTipHeight.hashCode ^
       percentage.hashCode ^
       displayTargetPercentage.hashCode ^
       displayTargetBlocks.hashCode ^
+      remainingScanBlocks.hashCode ^
+      pendingScanStartHeight.hashCode ^
       isSyncing.hashCode ^
-      isComplete.hashCode ^
       hasNewTx.hashCode ^
       phaseCompletedUnits.hashCode ^
       phaseTotalUnits.hashCode ^
@@ -1425,17 +1579,81 @@ class ApiSyncProgressEvent {
       identical(this, other) ||
       other is ApiSyncProgressEvent &&
           runtimeType == other.runtimeType &&
+          kind == other.kind &&
           scannedHeight == other.scannedHeight &&
           chainTipHeight == other.chainTipHeight &&
           percentage == other.percentage &&
           displayTargetPercentage == other.displayTargetPercentage &&
           displayTargetBlocks == other.displayTargetBlocks &&
+          remainingScanBlocks == other.remainingScanBlocks &&
+          pendingScanStartHeight == other.pendingScanStartHeight &&
           isSyncing == other.isSyncing &&
-          isComplete == other.isComplete &&
           hasNewTx == other.hasNewTx &&
           phaseCompletedUnits == other.phaseCompletedUnits &&
           phaseTotalUnits == other.phaseTotalUnits &&
           phase == other.phase;
+}
+
+/// A wallet's durable transparent ledger mode.
+enum ApiTransparentLedgerMode {
+  /// Public transparent lookups are authoritative.
+  public,
+
+  /// Public transparent lookups are forbidden.
+  privateRequired,
+}
+
+/// An error from a call whose failures the app acts on. Its Dart
+/// `toString()` is the message, so existing message handling still works.
+class ApiWalletError implements FrbException {
+  final ApiWalletErrorCode code;
+  final String message;
+
+  const ApiWalletError({required this.code, required this.message});
+
+  @override
+  String toString() => message;
+
+  @override
+  int get hashCode => code.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ApiWalletError &&
+          runtimeType == other.runtimeType &&
+          code == other.code &&
+          message == other.message;
+}
+
+/// What the app should do about a failure, beyond showing its message.
+///
+/// Decisions such as keeping a signed transaction for a retry read this code,
+/// never the message, so rewording a message cannot change them.
+enum ApiWalletErrorCode {
+  /// Nothing more than the message.
+  other,
+
+  /// Nothing was sent and the signed transaction is kept: private recovery
+  /// is catching up, or the wallet was busy. Offer to send the same
+  /// signatures again after sync.
+  retryAfterRecovery,
+
+  /// Transparent broadcast authority refused the transaction for good
+  /// before anything was sent.
+  authorityRefused,
+
+  /// The Ledger operation can never go through; do not offer a retry.
+  /// After a broadcast it has been discarded. After a checkpoint, a
+  /// different signed transaction is already saved under its ID.
+  ledgerOperationTerminal,
+
+  /// Private recovery has not yet covered the transparent funds.
+  recoveryIncomplete,
+
+  /// The wallet still requires private recovery while Private queries is
+  /// off: turning it off did not finish.
+  optOutUnfinished,
 }
 
 class BlockMetaInfo {
@@ -2806,31 +3024,82 @@ class TexPcztPairResult {
 class TransactionDetail {
   final String txidHex;
   final String txKind;
+
+  /// Exact whole-transaction network fee. Display only; does not identify the payer
+  /// or the account's share, and does not establish payment completeness.
+  final BigInt? networkFee;
   final String? primaryAddress;
   final String? sourceAddress;
   final String? sourcePool;
+
+  /// For a receive: the wallet account recorded as having sent every
+  /// received output shown. An account, never an address.
+  final String? sourceAccountUuid;
   final String? memo;
   final List<TransactionDetailOutput> outputs;
+
+  /// Whether `outputs` holds every recipient and memo.
+  final bool detailsComplete;
+
+  /// See [`TransactionInfo::provisional`].
+  final bool provisional;
+
+  /// What transparent txid enhancement knows about the transaction's
+  /// transparent outputs; `None` when it has no transparent part the
+  /// account recorded.
+  final TransparentDetailsState? transparentDetailsState;
+
+  /// The shown transparent outputs, in order, when the state is
+  /// `Available`: every output, or the first two of private details.
+  final List<TransparentRecipient> transparentRecipients;
+
+  /// Every transparent output when the state is `Available`, including any
+  /// `transparent_recipients` leaves out.
+  final int? transparentOutputCount;
+
+  /// What the private details leave out, by name: `non_standard_sender`,
+  /// `multiple_source_scripts`, `shared_funding`,
+  /// `shielded_and_transparent_funding`, `non_standard_output`,
+  /// `more_than_two_outputs`. Empty when nothing is left out or the details
+  /// came from the raw transaction; non-empty is when a receipt may offer
+  /// [`enhance_transaction_publicly`].
+  final List<String> transparentOmissions;
 
   const TransactionDetail({
     required this.txidHex,
     required this.txKind,
+    this.networkFee,
     this.primaryAddress,
     this.sourceAddress,
     this.sourcePool,
+    this.sourceAccountUuid,
     this.memo,
     required this.outputs,
+    required this.detailsComplete,
+    required this.provisional,
+    this.transparentDetailsState,
+    required this.transparentRecipients,
+    this.transparentOutputCount,
+    required this.transparentOmissions,
   });
 
   @override
   int get hashCode =>
       txidHex.hashCode ^
       txKind.hashCode ^
+      networkFee.hashCode ^
       primaryAddress.hashCode ^
       sourceAddress.hashCode ^
       sourcePool.hashCode ^
+      sourceAccountUuid.hashCode ^
       memo.hashCode ^
-      outputs.hashCode;
+      outputs.hashCode ^
+      detailsComplete.hashCode ^
+      provisional.hashCode ^
+      transparentDetailsState.hashCode ^
+      transparentRecipients.hashCode ^
+      transparentOutputCount.hashCode ^
+      transparentOmissions.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2839,11 +3108,19 @@ class TransactionDetail {
           runtimeType == other.runtimeType &&
           txidHex == other.txidHex &&
           txKind == other.txKind &&
+          networkFee == other.networkFee &&
           primaryAddress == other.primaryAddress &&
           sourceAddress == other.sourceAddress &&
           sourcePool == other.sourcePool &&
+          sourceAccountUuid == other.sourceAccountUuid &&
           memo == other.memo &&
-          outputs == other.outputs;
+          outputs == other.outputs &&
+          detailsComplete == other.detailsComplete &&
+          provisional == other.provisional &&
+          transparentDetailsState == other.transparentDetailsState &&
+          transparentRecipients == other.transparentRecipients &&
+          transparentOutputCount == other.transparentOutputCount &&
+          transparentOmissions == other.transparentOmissions;
 }
 
 class TransactionDetailOutput {
@@ -2883,12 +3160,30 @@ class TransactionDetailOutput {
           usesOrchardReceiver == other.usesOrchardReceiver;
 }
 
+/// The network fee shown for a transaction.
+enum TransactionFeeState {
+  /// The account's attributed fee is known.
+  known,
+
+  /// The account spent funds, or may have, but its fee share is unknown.
+  /// Show it as unknown, never as zero.
+  unknown,
+
+  /// The account spent nothing, so it paid no fee.
+  notApplicable,
+}
+
 class TransactionInfo {
   final String txidHex;
   final BigInt minedHeight;
   final bool expiredUnmined;
   final PlatformInt64 accountBalanceDelta;
+
+  /// The network fee shown for the transaction. Zero unless `fee_state` is
+  /// `Known`. Display only: it is never subtracted from `display_amount`
+  /// or `account_balance_delta`.
   final BigInt fee;
+  final TransactionFeeState feeState;
   final BigInt blockTime;
   final bool isTransparent;
   final String txKind;
@@ -2907,12 +3202,25 @@ class TransactionInfo {
   final bool? fundingParentExpired;
   final BigInt createdTime;
 
+  /// Whether the recipients, payment amounts, and memos are known.
+  final bool detailsComplete;
+
+  /// Whether later discovery or enhancement can still change this entry.
+  /// A provisional debit is a net amount, not a payment amount.
+  final bool provisional;
+
+  /// Whether `display_amount` is a balance movement that retains its fee,
+  /// rather than an established payment. Show it as a net change, including
+  /// when the account's fee share is unknown.
+  final bool amountIncludesFee;
+
   const TransactionInfo({
     required this.txidHex,
     required this.minedHeight,
     required this.expiredUnmined,
     required this.accountBalanceDelta,
     required this.fee,
+    required this.feeState,
     required this.blockTime,
     required this.isTransparent,
     required this.txKind,
@@ -2923,6 +3231,9 @@ class TransactionInfo {
     this.fundingParentMinedHeight,
     this.fundingParentExpired,
     required this.createdTime,
+    required this.detailsComplete,
+    required this.provisional,
+    required this.amountIncludesFee,
   });
 
   @override
@@ -2932,6 +3243,7 @@ class TransactionInfo {
       expiredUnmined.hashCode ^
       accountBalanceDelta.hashCode ^
       fee.hashCode ^
+      feeState.hashCode ^
       blockTime.hashCode ^
       isTransparent.hashCode ^
       txKind.hashCode ^
@@ -2941,7 +3253,10 @@ class TransactionInfo {
       fundingParentTxid.hashCode ^
       fundingParentMinedHeight.hashCode ^
       fundingParentExpired.hashCode ^
-      createdTime.hashCode;
+      createdTime.hashCode ^
+      detailsComplete.hashCode ^
+      provisional.hashCode ^
+      amountIncludesFee.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -2953,6 +3268,7 @@ class TransactionInfo {
           expiredUnmined == other.expiredUnmined &&
           accountBalanceDelta == other.accountBalanceDelta &&
           fee == other.fee &&
+          feeState == other.feeState &&
           blockTime == other.blockTime &&
           isTransparent == other.isTransparent &&
           txKind == other.txKind &&
@@ -2962,7 +3278,140 @@ class TransactionInfo {
           fundingParentTxid == other.fundingParentTxid &&
           fundingParentMinedHeight == other.fundingParentMinedHeight &&
           fundingParentExpired == other.fundingParentExpired &&
-          createdTime == other.createdTime;
+          createdTime == other.createdTime &&
+          detailsComplete == other.detailsComplete &&
+          provisional == other.provisional &&
+          amountIncludesFee == other.amountIncludesFee;
+}
+
+/// What the transparent fields of a [`WalletBalance`] represent.
+enum TransparentBalanceAuthority {
+  /// Current authorized amounts.
+  current,
+
+  /// No current authority: the transparent fields are zero because nothing
+  /// is spendable, and `transparent_last_known` holds the prior amount.
+  lastKnown,
+
+  /// No current authority and no prior amount. Show as unavailable, never 0.
+  unavailable,
+
+  /// No current authority, and private recovery will not restore it on its
+  /// own: `transparent_stop` says why. The transparent fields are zero, and
+  /// `transparent_last_known` holds the prior amount, if any.
+  stopped,
+}
+
+/// What a development lookup found. Nothing is stored.
+class TransparentDetailsLookup {
+  /// `found`, `absent`, `placementUnknown` or `unsupported`.
+  final String outcome;
+  final List<TransparentRecipient> recipients;
+
+  /// The whole transaction's exact fee, when the publication knows it.
+  final BigInt? feeZatoshi;
+  final int transparentInputCount;
+  final bool coinbase;
+
+  const TransparentDetailsLookup({
+    required this.outcome,
+    required this.recipients,
+    this.feeZatoshi,
+    required this.transparentInputCount,
+    required this.coinbase,
+  });
+
+  @override
+  int get hashCode =>
+      outcome.hashCode ^
+      recipients.hashCode ^
+      feeZatoshi.hashCode ^
+      transparentInputCount.hashCode ^
+      coinbase.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TransparentDetailsLookup &&
+          runtimeType == other.runtimeType &&
+          outcome == other.outcome &&
+          recipients == other.recipients &&
+          feeZatoshi == other.feeZatoshi &&
+          transparentInputCount == other.transparentInputCount &&
+          coinbase == other.coinbase;
+}
+
+/// Whether a transparent or mixed transaction's outputs are known.
+enum TransparentDetailsState {
+  /// `transparent_recipients` holds every transparent output.
+  available,
+
+  /// No lookup has answered yet; a later sync fills them in.
+  pending,
+
+  /// The last lookup failed; a later sync retries when the service is
+  /// reachable.
+  unavailable,
+
+  /// Private mode cannot look the transaction up: the private publication
+  /// does not cover it.
+  notCovered,
+}
+
+/// One transparent output of a transaction.
+class TransparentRecipient {
+  final int outputIndex;
+
+  /// The P2PKH or P2SH address it pays; `None` for other scripts.
+  final String? address;
+  final BigInt amountZatoshi;
+
+  /// Whether the account recorded this output as its own.
+  final bool isOwn;
+
+  const TransparentRecipient({
+    required this.outputIndex,
+    this.address,
+    required this.amountZatoshi,
+    required this.isOwn,
+  });
+
+  @override
+  int get hashCode =>
+      outputIndex.hashCode ^
+      address.hashCode ^
+      amountZatoshi.hashCode ^
+      isOwn.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TransparentRecipient &&
+          runtimeType == other.runtimeType &&
+          outputIndex == other.outputIndex &&
+          address == other.address &&
+          amountZatoshi == other.amountZatoshi &&
+          isOwn == other.isOwn;
+}
+
+/// Why private transparent recovery cannot restore an account's authority.
+enum TransparentStopReason {
+  /// An integrity failure quarantined the account's evidence.
+  quarantined,
+
+  /// Legacy public evidence the private ledger cannot explain.
+  legacyDiscrepancy,
+
+  /// The service withdrew a publication the account was recovered from.
+  withdrawn,
+
+  /// Recovery stalled repeatedly.
+  stalled,
+
+  /// The wallet requires private recovery while private queries are off:
+  /// turning them off did not finish. Turning them off again restores public
+  /// lookups.
+  optOutUnfinished,
 }
 
 class TxDataRequest {
@@ -3002,6 +3451,21 @@ class TxDataRequest {
 
 class WalletBalance {
   final WalletBalanceAvailability availability;
+  final TransparentBalanceAuthority transparentAuthority;
+
+  /// Informational prior transparent total, present only with
+  /// `TransparentBalanceAuthority::LastKnown` or `Stopped`. It never
+  /// authorizes a spend.
+  final BigInt? transparentLastKnown;
+
+  /// Why recovery is stopped, present only with
+  /// `TransparentBalanceAuthority::Stopped`.
+  final TransparentStopReason? transparentStop;
+
+  /// The wallet durably requires private transparent authority, so a
+  /// current amount lasts only until the chain moves past the private
+  /// ledger's coverage.
+  final bool transparentPrivate;
   final BigInt transparent;
   final BigInt sapling;
   final BigInt orchard;
@@ -3035,6 +3499,10 @@ class WalletBalance {
 
   const WalletBalance({
     required this.availability,
+    required this.transparentAuthority,
+    this.transparentLastKnown,
+    this.transparentStop,
+    required this.transparentPrivate,
     required this.transparent,
     required this.sapling,
     required this.orchard,
@@ -3058,6 +3526,10 @@ class WalletBalance {
   @override
   int get hashCode =>
       availability.hashCode ^
+      transparentAuthority.hashCode ^
+      transparentLastKnown.hashCode ^
+      transparentStop.hashCode ^
+      transparentPrivate.hashCode ^
       transparent.hashCode ^
       sapling.hashCode ^
       orchard.hashCode ^
@@ -3083,6 +3555,10 @@ class WalletBalance {
       other is WalletBalance &&
           runtimeType == other.runtimeType &&
           availability == other.availability &&
+          transparentAuthority == other.transparentAuthority &&
+          transparentLastKnown == other.transparentLastKnown &&
+          transparentStop == other.transparentStop &&
+          transparentPrivate == other.transparentPrivate &&
           transparent == other.transparent &&
           sapling == other.sapling &&
           orchard == other.orchard &&
