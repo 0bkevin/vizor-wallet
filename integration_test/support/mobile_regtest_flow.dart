@@ -198,11 +198,13 @@ Future<void> enterText(WidgetTester tester, Key key, String text) async {
 /// Passcode/numpad keys are semantics-labeled, not keyed.
 Future<void> enterPasscode(WidgetTester tester, String digits) async {
   for (final digit in digits.split('')) {
-    final finder = find.bySemanticsLabel('Digit $digit');
+    // The keypad slides in with its route. A key that exists but is still
+    // off-screen would miss the tap, so wait until it can be hit.
+    final finder = find.bySemanticsLabel('Digit $digit').hitTestable();
     await pumpUntil(
       tester,
       () => tester.any(finder),
-      description: 'digit $digit key',
+      description: 'digit $digit key to be tappable',
     );
     await tester.tap(finder);
     await tester.pump(const Duration(milliseconds: 150));
