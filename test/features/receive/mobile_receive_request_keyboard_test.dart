@@ -205,6 +205,10 @@ void main() {
           expect(cardRect.bottom, lessThanOrEqualTo(823.4667 - inset));
           expect(buttonRect.top, greaterThanOrEqualTo(cardRect.top));
           expect(buttonRect.bottom, lessThanOrEqualTo(cardRect.bottom));
+          expect(
+            cardRect.bottom - buttonRect.bottom,
+            inset > 0 ? AppSpacing.sm : AppSpacing.base,
+          );
 
           await tester.tapAt(
             Offset(
@@ -234,6 +238,46 @@ void main() {
       );
     }
   }
+
+  testWidgets('restores the request footer spacing when the keyboard closes', (
+    tester,
+  ) async {
+    await _pumpPhone(tester);
+    await _openRequestWithMemo(tester, keyboardInset: 0);
+    final button = find.byKey(const ValueKey('request_create_button'));
+    final card = find.byType(MobileModalCard);
+    final cardSurface = find.descendant(
+      of: card,
+      matching: find.byType(Material),
+    );
+    final fields = find.descendant(
+      of: card,
+      matching: find.byType(SingleChildScrollView),
+    );
+
+    for (final inset in [0.0, 332.0889, 0.0]) {
+      tester.view.viewInsets = FakeViewPadding(bottom: inset);
+      await _settle(tester);
+      final buttonRect = tester.getRect(button);
+      expect(buttonRect.height, AppButtonSizing.largeHeight);
+      expect(
+        buttonRect.top - tester.getRect(fields).bottom,
+        inset > 0 ? AppSpacing.sm : AppSpacing.md,
+      );
+      expect(
+        tester.getRect(cardSurface).bottom - buttonRect.bottom,
+        inset > 0 ? AppSpacing.sm : AppSpacing.base,
+      );
+      expect(tester.takeException(), isNull);
+    }
+
+    await tester.tap(button);
+    await _settle(tester);
+    expect(
+      tester.widget<RequestQrSurface>(find.byType(RequestQrSurface)).data,
+      _requestUri,
+    );
+  }, variant: TargetPlatformVariant({TargetPlatform.android}));
 
   testWidgets(
     'keeps the action reachable with enlarged text on a narrow phone',
