@@ -78,12 +78,11 @@ class RequestAmountSheetCompose extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final amountError = request.amountError?.trim();
-    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     return MobileModalScaffold(
       title: kRequestFlowTitle,
       onClose: onClose ?? _noop,
-      bottomPadding: keyboardOpen ? AppSpacing.sm : AppSpacing.base,
+      bottomPadding: AppSpacing.base,
       constrainBody: true,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -124,6 +123,7 @@ class RequestAmountSheetCompose extends StatelessWidget {
                   if (request.isShielded) ...[
                     if (messageExpanded)
                       RequestMessageField(
+                        visibleLines: 2,
                         text: request.messageText ?? '',
                         controller: messageController,
                         onChanged: onMessageChanged,
@@ -139,8 +139,7 @@ class RequestAmountSheetCompose extends StatelessWidget {
               ),
             ),
           ),
-          if (request.isShielded)
-            SizedBox(height: keyboardOpen ? AppSpacing.sm : AppSpacing.md),
+          if (request.isShielded) const SizedBox(height: AppSpacing.md),
           AppButton(
             key: const ValueKey('request_create_button'),
             expand: true,

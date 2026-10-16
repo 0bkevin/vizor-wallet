@@ -11,6 +11,7 @@ import 'package:zcash_wallet/src/core/profile_pictures.dart';
 import 'package:zcash_wallet/src/core/theme/app_theme.dart';
 import 'package:zcash_wallet/src/features/receive/screens/mobile/mobile_receive_screen.dart';
 import 'package:zcash_wallet/src/features/receive/widgets/request/request_qr_surface.dart';
+import 'package:zcash_wallet/src/features/receive/widgets/request/request_amount_model.dart';
 import 'package:zcash_wallet/src/providers/account_provider.dart';
 import 'package:zcash_wallet/src/providers/receive_address_provider.dart';
 import 'package:zcash_wallet/src/providers/sync_provider.dart';
@@ -205,10 +206,28 @@ void main() {
           expect(cardRect.bottom, lessThanOrEqualTo(823.4667 - inset));
           expect(buttonRect.top, greaterThanOrEqualTo(cardRect.top));
           expect(buttonRect.bottom, lessThanOrEqualTo(cardRect.bottom));
-          expect(
-            cardRect.bottom - buttonRect.bottom,
-            inset > 0 ? AppSpacing.sm : AppSpacing.base,
+          expect(cardRect.bottom - buttonRect.bottom, AppSpacing.base);
+          final field = find.byKey(const ValueKey('request_message_field'));
+          final textInput = find.descendant(
+            of: field,
+            matching: find.byType(TextField),
           );
+          expect(
+            tester.getSize(textInput).height,
+            AppTypography.bodyMedium.fontSize! *
+                AppTypography.bodyMedium.height! *
+                2,
+          );
+          final fields = find.descendant(
+            of: find.byType(MobileModalCard),
+            matching: find.byType(SingleChildScrollView),
+          );
+          final formScroll = tester.state<ScrollableState>(
+            find
+                .descendant(of: fields, matching: find.byType(Scrollable))
+                .first,
+          );
+          expect(formScroll.position.maxScrollExtent, 0);
 
           await tester.tapAt(
             Offset(
@@ -239,7 +258,7 @@ void main() {
     }
   }
 
-  testWidgets('restores the request footer spacing when the keyboard closes', (
+  testWidgets('keeps the original spacing through keyboard transitions', (
     tester,
   ) async {
     await _pumpPhone(tester);
@@ -255,18 +274,15 @@ void main() {
       matching: find.byType(SingleChildScrollView),
     );
 
-    for (final inset in [0.0, 332.0889, 0.0]) {
+    for (final inset in [0.0, 332.0889, 358.4, 0.0]) {
       tester.view.viewInsets = FakeViewPadding(bottom: inset);
       await _settle(tester);
       final buttonRect = tester.getRect(button);
       expect(buttonRect.height, AppButtonSizing.largeHeight);
-      expect(
-        buttonRect.top - tester.getRect(fields).bottom,
-        inset > 0 ? AppSpacing.sm : AppSpacing.md,
-      );
+      expect(buttonRect.top - tester.getRect(fields).bottom, AppSpacing.md);
       expect(
         tester.getRect(cardSurface).bottom - buttonRect.bottom,
-        inset > 0 ? AppSpacing.sm : AppSpacing.base,
+        AppSpacing.base,
       );
       expect(tester.takeException(), isNull);
     }
@@ -278,6 +294,42 @@ void main() {
       _requestUri,
     );
   }, variant: TargetPlatformVariant({TargetPlatform.android}));
+
+  testWidgets(
+    'long memos scroll inside the compact field and survive creation',
+    (tester) async {
+      await _pumpPhone(tester);
+      await _openRequestWithMemo(tester);
+      final message = List.generate(12, (i) => 'Memo line $i').join('\n');
+      final field = find.byKey(const ValueKey('request_message_field'));
+      await tester.enterText(field, message);
+      await _settle(tester);
+      final input = tester.widget<EditableText>(
+        find.descendant(of: field, matching: find.byType(EditableText)),
+      );
+      final memoScroll = tester.state<ScrollableState>(
+        find.descendant(of: field, matching: find.byType(Scrollable)).first,
+      );
+      expect(memoScroll.position.maxScrollExtent, greaterThan(0));
+      memoScroll.position.jumpTo(0);
+      await tester.pump();
+      expect(input.controller.text, message);
+      await tester.tap(find.byKey(const ValueKey('request_create_button')));
+      await tester.idle();
+      tester.view.viewInsets = const FakeViewPadding();
+      await _settle(tester);
+      final qr = tester.widget<RequestQrSurface>(find.byType(RequestQrSurface));
+      expect(qr.data, contains('amount=1'));
+      final expected = ZecRequestView(
+        address: _address,
+        amountZec: '1',
+        messageText: message,
+      );
+      expect(qr.data, expected.qrData);
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant({TargetPlatform.android}),
+  );
 
   testWidgets(
     'keeps the action reachable with enlarged text on a narrow phone',

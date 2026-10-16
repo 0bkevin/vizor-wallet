@@ -604,10 +604,14 @@ class RequestMessageField extends StatelessWidget {
     this.controller,
     this.onChanged,
     this.onClose,
+    this.visibleLines,
     super.key,
   });
 
   final String text;
+
+  /// A compact viewport for mobile sheets; desktop retains its fixed height.
+  final int? visibleLines;
   final TextEditingController? controller;
   final ValueChanged<String>? onChanged;
 
@@ -642,8 +646,9 @@ class RequestMessageField extends StatelessWidget {
       borderColor: overLimit ? colors.border.utilityDestructive : null,
       leading: AppIcon(AppIcons.scroll, size: 20, color: colors.icon.regular),
       messageText: overLimit ? 'Message is too long' : null,
-      minLines: 3,
-      maxLines: 3,
+      minLines: visibleLines ?? 3,
+      maxLines: visibleLines ?? 3,
+      multilineVisibleLines: visibleLines,
       textStyle: AppTypography.bodyMedium.copyWith(color: colors.text.accent),
       showClearButton: true,
       clearButtonRequiresText: false,
