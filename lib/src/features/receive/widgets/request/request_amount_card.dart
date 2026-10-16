@@ -605,6 +605,7 @@ class RequestMessageField extends StatelessWidget {
     this.onChanged,
     this.onClose,
     this.visibleLines,
+    this.inlineValidationMessage = false,
     super.key,
   });
 
@@ -612,6 +613,10 @@ class RequestMessageField extends StatelessWidget {
 
   /// A compact viewport for mobile sheets; desktop retains its fixed height.
   final int? visibleLines;
+
+  /// Includes validation in the measured content of clipped mobile forms.
+  /// Desktop callers retain the field's existing overlay message.
+  final bool inlineValidationMessage;
   final TextEditingController? controller;
   final ValueChanged<String>? onChanged;
 
@@ -626,7 +631,7 @@ class RequestMessageField extends StatelessWidget {
     final used = zip321MemoByteLength(text);
     final overLimit = used > kZip321MaxMemoBytes;
 
-    return AppTextField(
+    final field = AppTextField(
       key: const ValueKey('request_message_field'),
       label: 'Message',
       labelStyle: AppTypography.labelLarge.copyWith(
@@ -645,7 +650,9 @@ class RequestMessageField extends StatelessWidget {
       tone: overLimit ? AppTextFieldTone.destructive : AppTextFieldTone.neutral,
       borderColor: overLimit ? colors.border.utilityDestructive : null,
       leading: AppIcon(AppIcons.scroll, size: 20, color: colors.icon.regular),
-      messageText: overLimit ? 'Message is too long' : null,
+      messageText: overLimit && !inlineValidationMessage
+          ? 'Message is too long'
+          : null,
       minLines: visibleLines ?? 3,
       maxLines: visibleLines ?? 3,
       multilineVisibleLines: visibleLines,
@@ -655,6 +662,40 @@ class RequestMessageField extends StatelessWidget {
       clearButtonSemanticLabel: 'Close message',
       onClear: onClose,
       onChanged: onChanged,
+    );
+    if (!inlineValidationMessage) return field;
+
+    // Keep the field in the same slot as validation changes so typing across
+    // the byte limit does not replace its state or dismiss the keyboard.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        field,
+        if (overLimit) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Row(
+            key: const ValueKey('request_message_error'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AppIcon(
+                AppIcons.warning,
+                size: AppIconSize.medium,
+                color: colors.text.destructive,
+              ),
+              const SizedBox(width: AppSpacing.xxs),
+              Expanded(
+                child: Text(
+                  'Message is too long',
+                  style: AppTypography.labelMedium.copyWith(
+                    color: colors.text.destructive,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 }

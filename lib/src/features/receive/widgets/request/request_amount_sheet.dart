@@ -124,6 +124,7 @@ class RequestAmountSheetCompose extends StatelessWidget {
                     if (messageExpanded)
                       RequestMessageField(
                         visibleLines: 2,
+                        inlineValidationMessage: true,
                         text: request.messageText ?? '',
                         controller: messageController,
                         onChanged: onMessageChanged,

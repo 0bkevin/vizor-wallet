@@ -9,6 +9,7 @@ import 'package:zcash_wallet/src/core/config/rpc_endpoint_config.dart';
 import 'package:zcash_wallet/src/core/layout/mobile/app_mobile_sheet.dart';
 import 'package:zcash_wallet/src/core/profile_pictures.dart';
 import 'package:zcash_wallet/src/core/theme/app_theme.dart';
+import 'package:zcash_wallet/src/core/widgets/app_button.dart';
 import 'package:zcash_wallet/src/features/receive/screens/mobile/mobile_receive_screen.dart';
 import 'package:zcash_wallet/src/features/receive/widgets/request/request_qr_surface.dart';
 import 'package:zcash_wallet/src/features/receive/widgets/request/request_amount_model.dart';
@@ -166,6 +167,100 @@ Future<void> _openRequestWithMemo(
 
 void main() {
   setUpAll(loadFigmaCompareFonts);
+
+  for (final (name, size, scale, inset) in [
+    ('Samsung', const Size(384, 823.4667), 1.0, 358.4),
+    ('large text', const Size(320, 700), 1.5, 256.0),
+    ('short phone', const Size(320, 568), 1.0, 256.0),
+    ('keyboard closed', const Size(384, 823.4667), 1.0, 0.0),
+  ]) {
+    testWidgets(
+      'over-limit memo error is fully visible with $name',
+      (tester) async {
+        await _pumpPhone(tester, size: size, textScale: scale);
+        await _openRequestWithMemo(tester, keyboardInset: inset);
+        await tester.enterText(
+          find.byKey(const ValueKey('request_message_field')),
+          'a' * 513,
+        );
+        await _settle(tester);
+        if (inset > 0) {
+          expect(tester.testTextInput.isVisible, isTrue);
+        } else {
+          FocusManager.instance.primaryFocus?.unfocus();
+          await tester.pump();
+        }
+        final fields = find.descendant(
+          of: find.byType(MobileModalCard),
+          matching: find.byType(SingleChildScrollView),
+        );
+        final scroll = tester.state<ScrollableState>(
+          find.descendant(of: fields, matching: find.byType(Scrollable)).first,
+        );
+        scroll.position.jumpTo(scroll.position.maxScrollExtent);
+        await tester.pump();
+        final error = find.text('Message is too long');
+        expect(error, findsOneWidget);
+        final errorRect = tester.getRect(error);
+        final viewport = tester.getRect(fields);
+        expect(errorRect.top, greaterThanOrEqualTo(viewport.top));
+        expect(errorRect.bottom, lessThanOrEqualTo(viewport.bottom));
+        expect(find.text('513/512'), findsOneWidget);
+        expect(
+          tester
+              .widget<AppButton>(
+                find.byKey(const ValueKey('request_create_button')),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(tester.takeException(), isNull);
+      },
+      variant: TargetPlatformVariant({
+        TargetPlatform.android,
+        TargetPlatform.iOS,
+      }),
+    );
+  }
+
+  testWidgets('memo byte boundary and recovery preserve the two-line field', (
+    tester,
+  ) async {
+    await _pumpPhone(tester);
+    await _openRequestWithMemo(tester);
+    final field = find.byKey(const ValueKey('request_message_field'));
+    final button = find.byKey(const ValueKey('request_create_button'));
+    final originalHeight = tester.getSize(field).height;
+    final valid = '${'가' * 170}ab';
+    for (final message in ['a' * 512, valid]) {
+      await tester.enterText(field, '$message!');
+      await _settle(tester);
+      expect(find.text('513/512'), findsOneWidget);
+      expect(find.text('Message is too long'), findsOneWidget);
+      expect(tester.widget<AppButton>(button).onPressed, isNull);
+      expect(tester.testTextInput.isVisible, isTrue);
+      await tester.enterText(field, message);
+      await _settle(tester);
+      expect(find.text('512/512'), findsOneWidget);
+      expect(find.text('Message is too long'), findsNothing);
+      expect(tester.widget<AppButton>(button).onPressed, isNotNull);
+      expect(tester.getSize(field).height, originalHeight);
+      expect(tester.testTextInput.isVisible, isTrue);
+    }
+    await tester.tap(button);
+    await tester.idle();
+    tester.view.viewInsets = const FakeViewPadding();
+    await _settle(tester);
+    expect(
+      tester.widget<RequestQrSurface>(find.byType(RequestQrSurface)).data,
+      ZecRequestView(
+        address: _address,
+        amountZec: '1',
+        messageText: valid,
+      ).qrData,
+    );
+    expect(tester.takeException(), isNull);
+  }, variant: TargetPlatformVariant({TargetPlatform.android}));
 
   for (final (keyboard, inset) in <(String, double)>[
     ('Gboard', 332.0889),
